@@ -1039,20 +1039,46 @@ vec3 skyColor(float row, vec2 rayDir, float pixX) {
     base += celestialContrib(-sunDir, -u_sunElev, u_moonColor, pixX, row);
     if (u_starsCount > 0.5 && u_nightFactor > 0.02) {
         float az = atan(rayDir.y, rayDir.x);
-        // Esfera celeste: o grid de estrelas é ancorado no MUNDO (azimute +
-        // elevação verdadeira do raio), não na linha da tela. Antes usava
-        // "1.0 - row/u_horizon", que muda quando o jogador olha pra cima/
-        // baixo (u_horizon varia) — o grid esticava/comprimia e as estrelas
-        // se distorciam. Elevação verdadeira via pinhole invertido (mesma
-        // relação do chão, rowDist = (u_scale*0.5)/(row-horizon)): é um
-        // ângulo de mundo fixo, então o campo de estrelas fica rígido como
-        // uma cúpula e nunca passa de sin(90°) = 1.
-        float tanE = (u_horizon - row) / max(u_scale * 0.5, 1.0);
-        float elevProxy = tanE / sqrt(1.0 + tanE * tanE);
-        vec2 starCell = floor(vec2(az * 40.0, elevProxy * u_starsCount));
-        float h = starHash(starCell);
-        float starMask = step(0.995, h);
-        base += vec3(1.0) * starMask * u_nightFactor * 0.9;
+        // Cúpula celeste: a elevação usa as 3 componentes do raio (right =
+        // u_plane·ndcX, up = (horizon-row)/focal, forward = 1) em vez de só
+        // a linha da tela. Isso ancora o grid no MUNDO e restaura a curvatura
+        // de domo: as estrelas não achatam nas bordas nem parecem girar com a
+        // câmera (antes a elevação "1.0 - row/u_horizon" mudava junto com
+        // u_horizon ao olhar pra cima/baixo).
+        float focal = max(u_scale * 0.5, 1.0);
+        float ndcX = pixX / max(u_res.x * 0.5, 1.0) - 1.0;
+        float rx = length(u_plane) * ndcX;
+        float ry = (u_horizon - row) / focal;
+        float elevSin = ry / sqrt(rx * rx + ry * ry + 1.0);
+
+        // Estrelas como PONTOS (não a célula cheia): a célula de azimute
+        // (1.43°) × sin-elevação (1/260) projeta como listra 12×1px perto do
+        // horizonte e quadrado 12×12 no alto. Aqui cada estrela é um disco de
+        // ~2-3px, redondo em qualquer direção (peso por eixo = px/célula).
+        // Verifica a vizinhança 3×3 para a estrela não sumir quando o
+        // fragmento está na borda da célula dela; o eixo do azimute usa mod
+        // canônico para a costura em ±180° não "comer" estrelas.
+        float azCells = 2.0 * 3.14159265 * 40.0;
+        float fragX = mod(az * 40.0, azCells);
+        vec2 fragCell = vec2(fragX, elevSin * u_starsCount);
+        vec2 cellSz = floor(fragCell);
+        float pxPerAzCell = (u_res.x * 0.5) * dot(rayDir, rayDir) / max(length(u_plane) * 40.0, 1e-4);
+        float pxPerElCell = focal * sqrt(rx * rx + ry * ry + 1.0) / max((1.0 - elevSin * elevSin) * u_starsCount, 1e-4);
+        float starMask = 0.0;
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                vec2 c = cellSz + vec2(float(dx), float(dy));
+                c.x = mod(c.x, azCells);
+                float hasStar = step(0.995, starHash(c));
+                vec2 sub = vec2(starHash(c + vec2(0.0, 1.0)), starHash(c + vec2(1.0, 0.0)));
+                vec2 off = c + sub - fragCell;
+                if (off.x > azCells * 0.5) off.x -= azCells;
+                if (off.x < -azCells * 0.5) off.x += azCells;
+                float dp = length(vec2(off.x * pxPerAzCell, off.y * pxPerElCell));
+                starMask += hasStar * (1.0 - smoothstep(1.3, 3.0, dp));
+            }
+        }
+        base += vec3(1.0) * clamp(starMask, 0.0, 1.0) * u_nightFactor * 0.9;
     }
     return base;
 }
