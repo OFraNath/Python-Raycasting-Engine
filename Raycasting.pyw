@@ -212,6 +212,7 @@ SKY_DEFAULTS = {
     "cycle": False,
     "day_length": 120.0,
     "start_time": 8.0,
+    "sun_peak": 45.0,
     "sun_color": "#fff2c0",
     "moon_color": "#b9c6e0",
     "stars": 0,
@@ -228,6 +229,16 @@ def _parse_sky(d):
     sky["cycle"] = str(d.get("cycle", "false")).strip().lower() in ("1", "true", "yes")
     sky["day_length"] = max(1.0, _to_float(d.get("day_length", 120), "SKY DAY_LENGTH"))
     sky["start_time"] = _to_float(d.get("start_time", 8), "SKY START_TIME") % 24.0
+    # sun_peak: maior elevação que o sol atinge ao meio-dia (graus acima do
+    # horizonte), default 45. 45 = o arco inteiro (nascer→zênite→pôr) fica
+    # visível no viewport olhando reto: o topo da tela cobre ~54.5° no showcase
+    # (FOV 70) e ~49° no garden (FOV 60), então um pico de 60 fazia o astro
+    # subir para fora da tela no meio-dia (a trajetória parecia "à distância").
+    # 90 = zênite (passa exatamente por cima da cabeça — no viewport o astro
+    # fica acima da tela mesmo olhando para cima); valores menores deixam o
+    # arco mais baixo/raso. A curva de luz do dia (day_factor/night_factor) é
+    # normalizada por sin(sun_peak): o meio-dia continua no brilho máximo.
+    sky["sun_peak"] = max(10.0, min(90.0, _to_float(d.get("sun_peak", 45), "SKY SUN_PEAK")))
     sky["sun_color"] = _parse_color(d.get("sun_color", "#fff2c0"))
     sky["moon_color"] = _parse_color(d.get("moon_color", "#b9c6e0"))
     sky["stars"] = max(0, _to_int(d.get("stars", 140), "SKY STARS"))
@@ -1024,7 +1035,16 @@ vec3 celestialContrib(vec2 dirWorld, float elevSin, vec3 col, float pixX, float 
     float ty = invDet * (-u_plane.y * dirWorld.x + u_plane.x * dirWorld.y);
     if (ty <= 0.02) return vec3(0.0);
     float screenX = (u_res.x * 0.5) * (1.0 + tx / ty);
-    float screenY = u_horizon - elevSin * u_scale * 0.5;
+    // Projeção de cúpula: mesma fórmula das estrelas (elevSin = ry/sqrt(rx²+ry²+rz²)).
+    // A antiga projeção linear (u_horizon - elevSin*u_scale*0.5) esmagava o astro
+    // na direção do horizonte: o zênite (elevSin=1) aparecia a só ~45° de altura.
+    // rx usa length(u_plane) igual ao domo das estrelas. Sem clamp no topo: quando
+    // a elevação passa do limite do viewport o astro sai da tela como as estrelas
+    // (olhar para cima para vê-lo) — nunca fica preso/escorregando na borda.
+    float rx = length(u_plane) * (tx / ty);
+    float tanE = elevSin / sqrt(max(1.0 - elevSin * elevSin, 1e-4));
+    float ry = tanE * sqrt(rx * rx + 1.0);
+    float screenY = u_horizon - ry * (u_scale * 0.5);
     float d = length(vec2(pixX - screenX, row - screenY));
     float mask = 1.0 - smoothstep(10.0, 16.0, d);
     float fade = clamp(elevSin * 6.0 + 0.3, 0.0, 1.0);
@@ -1851,9 +1871,21 @@ def main():
         prog["u_wallMax"].value = float(WALL_MAX)
         prog["u_orbMin"].value = float(ORB_MIN)
 
-        sun_angle = (SKY_TIME / 24.0) * 2.0 * math.pi
-        sun_elev = math.sin(sun_angle)
-        day_factor = max(0.0, min(1.0, sun_elev)) if SKY["enabled"] else 1.0
+        # Azimute do sol: meio-dia aponta para +X, a frente do jogador na carga
+        # (pangle=0). Assim o arco passa por cima À frente da câmera — o sol sobe
+        # pela esquerda, cruza o topo no meio-dia e desce pela direita. Antes o
+        # azimute era (SKY_TIME/24·2π), que punha o meio-dia em -X (atrás), e o
+        # sol só ficava na frente durante a noite, abaixo do horizonte.
+        sun_angle = ((SKY_TIME - 12.0) / 24.0) * 2.0 * math.pi
+        # Fase corrigida do ciclo solar: 6h amanhece (sin=0), 12h meio-dia no
+        # zênite (sin=1), 18h entardecer (sin=0), meia-noite embaixo (sin=-1).
+        # O pico é escalado por sun_peak (graus de elevação máxima). O day_factor
+        # é normalizado por sin(sun_peak): o meio-dia (sun_elev = sin(sun_peak))
+        # vira 1.0 sempre, então baixar o pico para caber o arco no viewport não
+        # escurece o meio-dia.
+        sun_time_angle = ((SKY_TIME - 6.0) / 24.0) * 2.0 * math.pi
+        sun_elev = math.sin(sun_time_angle) * math.sin(math.radians(SKY["sun_peak"]))
+        day_factor = max(0.0, min(1.0, sun_elev / max(math.sin(math.radians(SKY["sun_peak"])), 1e-4))) if SKY["enabled"] else 1.0
         night_factor = 1.0 - day_factor
 
         sb = [_rgb(THEME["sky_base"])[i] / 255.0 for i in range(3)]

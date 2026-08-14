@@ -172,7 +172,7 @@ const DEFAULT_WALL_COLORS = ["#7a6a55","#5590c8","#4caf6b","#c85a8a","#9a6ac8","
 // sol/lua/estrelas). Quando a seção existe, STARS padrão é 140 (comportamento
 // exato do back-end, que usa d.get("stars", 140)).
 const DEFAULT_SKY = {enabled:false, cycle:false, day_length:120, start_time:8,
-  sun_color:"#fff2c0", moon_color:"#b9c6e0", stars:140};
+  sun_peak:45, sun_color:"#fff2c0", moon_color:"#b9c6e0", stars:140};
 // Defaults de uma entrada nova de [PARTICLES] (mesmos valores de _parse_particles).
 const DEFAULT_PARTICLE = ["", 8, 0.5, 0.4];
 
@@ -402,11 +402,15 @@ function loadRcfg(text){
   // sol/lua/estrelas (sky["enabled"] = bool(dados["SKY"])).
   s.sky.enabled = Object.keys(skySec).length > 0;
   s.sky.cycle = ["1","true","yes"].includes(String(skySec.cycle||"").trim().toLowerCase());
-  s.sky.day_length = parseFloat(skySec.day_length ?? DEFAULT_SKY.day_length);
+  // Clamps espelham _parse_sky() da engine: day_length >= 1, hora % 24,
+  // sun_peak 10..90, stars >= 0. Sem isso o editor mostraria um valor que a
+  // engine troca na carga (ex.: DAY_LENGTH 0 vira 1, STARS -5 vira 0).
+  s.sky.day_length = Math.max(1, parseFloat(skySec.day_length ?? DEFAULT_SKY.day_length));
   s.sky.start_time = parseFloat(skySec.start_time ?? DEFAULT_SKY.start_time) % 24;
+  s.sky.sun_peak = Math.max(10, Math.min(90, parseFloat(skySec.sun_peak ?? DEFAULT_SKY.sun_peak)));
   s.sky.sun_color = normColor(skySec.sun_color || DEFAULT_SKY.sun_color);
   s.sky.moon_color = normColor(skySec.moon_color || DEFAULT_SKY.moon_color);
-  s.sky.stars = parseInt(skySec.stars ?? DEFAULT_SKY.stars);
+  s.sky.stars = Math.max(0, parseInt(skySec.stars ?? DEFAULT_SKY.stars));
 
   s.particles = {};
   for(const [tipo,valor] of Object.entries(dados.PARTICLES||{})){
@@ -492,13 +496,17 @@ function serializeRcfg(s){
     L.push("");
   }
   if(s.sky && s.sky.enabled){
+    // Normalização igual à da engine (_parse_sky) para o arquivo salvo nunca
+    // carregar "diferente" do que o editor mostra: DAY_LENGTH >= 1, hora % 24,
+    // SUN_PEAK 10..90, STARS >= 0.
     L.push("[SKY]");
     L.push(`CYCLE ${s.sky.cycle ? "true" : "false"}`);
-    L.push(`DAY_LENGTH ${s.sky.day_length}`);
-    L.push(`START_TIME ${s.sky.start_time}`);
+    L.push(`DAY_LENGTH ${Math.max(1, parseFloat(s.sky.day_length))}`);
+    L.push(`START_TIME ${parseFloat(s.sky.start_time) % 24}`);
+    L.push(`SUN_PEAK ${Math.max(10, Math.min(90, parseFloat(s.sky.sun_peak)))}`);
     L.push(`SUN_COLOR ${s.sky.sun_color}`);
     L.push(`MOON_COLOR ${s.sky.moon_color}`);
-    L.push(`STARS ${s.sky.stars}`);
+    L.push(`STARS ${Math.max(0, parseInt(s.sky.stars))}`);
     L.push("");
   }
   if(s.title && s.title.trim()){
@@ -1050,8 +1058,22 @@ function field(label, value, onChange, opts={}){
   const inp = document.createElement("input");
   inp.type = opts.type || "text";
   if(opts.step) inp.step = opts.step;
+  if(opts.min !== undefined) inp.min = opts.min;
+  if(opts.max !== undefined) inp.max = opts.max;
   inp.value = value;
   inp.oninput = ()=> onChange(opts.type==="number" ? parseFloat(inp.value) : inp.value);
+  // Clamp no blur para os limites ficarem visíveis logo ao sair do campo
+  // (sem atrapalhar a digitação): número fora de min/max é corrigido na hora.
+  if(opts.type==="number"){
+    inp.onblur = ()=>{
+      let v = parseFloat(inp.value);
+      if(Number.isNaN(v)) v = opts.min !== undefined ? parseFloat(opts.min) : 0;
+      if(opts.min !== undefined && v < parseFloat(opts.min)) v = parseFloat(opts.min);
+      if(opts.max !== undefined && v > parseFloat(opts.max)) v = parseFloat(opts.max);
+      inp.value = v;
+      onChange(v);
+    };
+  }
   wrap.appendChild(lab); wrap.appendChild(inp);
   return wrap;
 }
@@ -1266,14 +1288,17 @@ function panelSky(root){
   fs.appendChild(checkField("Céu ativo (sol/lua/estrelas)", state.sky.enabled, v=>{state.sky.enabled=v;}));
   fs.appendChild(checkField("Ciclo automático dia/noite", state.sky.cycle, v=>{state.sky.cycle=v;}));
   const r = document.createElement("div"); r.className="row2";
-  r.appendChild(field("Duração do dia (s)", state.sky.day_length, v=>state.sky.day_length=v, {type:"number", step:"5"}));
-  r.appendChild(field("Hora inicial (0–24)", state.sky.start_time, v=>state.sky.start_time=v, {type:"number", step:"0.5"}));
+  r.appendChild(field("Duração do dia (s)", state.sky.day_length, v=>state.sky.day_length=v, {type:"number", step:"5", min:1}));
+  r.appendChild(field("Hora inicial (0–24)", state.sky.start_time, v=>state.sky.start_time=v, {type:"number", step:"0.5", min:0, max:24}));
   fs.appendChild(r);
+  const r3 = document.createElement("div"); r3.className="row2";
+  r3.appendChild(field("Elevação máx. do sol (°)", state.sky.sun_peak, v=>state.sky.sun_peak=v, {type:"number", step:"5", min:10, max:90}));
+  fs.appendChild(r3);
   const r2 = document.createElement("div"); r2.className="row2";
   r2.appendChild(colorField("Cor do sol", state.sky.sun_color, v=>state.sky.sun_color=v));
   r2.appendChild(colorField("Cor da lua", state.sky.moon_color, v=>state.sky.moon_color=v));
   fs.appendChild(r2);
-  fs.appendChild(field("Estrelas (0 = nenhuma)", state.sky.stars, v=>state.sky.stars=v, {type:"number"}));
+  fs.appendChild(field("Estrelas (0 = nenhuma)", state.sky.stars, v=>state.sky.stars=v, {type:"number", min:0}));
   root.appendChild(fs);
   const hint = document.createElement("div"); hint.className="hint";
   hint.textContent = "No jogo: P pausa o ciclo · , e . ajustam a hora em ±0,5h. Estrelas só aparecem à noite.";
