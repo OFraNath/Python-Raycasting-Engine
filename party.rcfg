@@ -1,0 +1,85 @@
+# ============================================================
+#  RAYCASTING FPS — O Templo dos Cristais de Luz
+#  Mapa expandido, sem salas bloqueadas, alta luminosidade.
+# ============================================================
+[CONFIG]
+WINDOW 960 560
+MM 160
+FOV 75
+NUM_RAYS 240
+MAX_DEPTH 35
+MOVE_SPEED 0.07
+MOUSE_SENS_X 0.004
+MOUSE_SENS_Y 1.0
+MAX_LOOK_Y 240
+FOG 0.5
+GRADIENT_STEPS 16
+AMBIENT 0.35
+FLOOR_BANDS 4
+FLOOR_STEP 2
+LIGHT_RES 10
+LIGHT_SOFT_SAMPLES 8
+LIGHT_SOFT_RADIUS 0.5
+LIGHT_BOUNCE 0.50
+LIGHT_BOUNCE_RADIUS 2.0
+
+[SPAWN]
+X 2.5
+Y 2.5
+ANGLE 0
+
+[INFO]
+NAME Templo dos Cristais
+AUTHOR AI Collaborator
+
+[COLORS]
+1 #d4af37 #a67c00
+2 #00bfff #0077be
+3 #32cd32 #1e8422
+4 #ff1493 #b00863
+5 #9932cc #5e1f82
+6 #ff8c00 #b35900
+
+[LIGHTS]
+7 #fff8e7 5.0
+8 #00ffff 4.5
+9 #ff00ff 4.5
+
+[THEME]
+SKY_BASE #1a1a3a
+SKY_TOP #4a3b6e
+FLOOR_BASE #1e1e24
+FLOOR_TOP #3a3a4d
+CROSSHAIR #00ffff
+HUD_LIGHT #00ffcc
+HUD_ALERT #ffcc00
+MINIMAP_PLAYER #00ffff
+
+[TITLE]
+🔮 O TEMPLO DOS CRISTAIS DE LUZ
+
+[MAP]
+1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
+1 0 0 0 1 0 0 0 0 0 0 1 1 0 0 0 0 0 0 0 0 0 0 1
+1 0 7 0 1 0 8 0 0 0 0 0 0 0 0 0 9 0 0 0 7 0 0 1
+1 0 0 0 2 0 0 0 0 0 0 2 2 0 0 0 0 0 0 0 0 0 0 1
+1 1 0 0 1 1 1 0 0 1 1 1 1 1 1 0 0 1 1 1 0 2 1 1
+1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1
+1 0 8 0 0 0 0 7 0 0 0 0 0 0 0 0 7 0 0 0 0 8 0 1
+1 0 0 0 3 3 0 0 0 3 0 0 0 0 3 0 0 0 3 3 0 0 0 1
+1 0 0 0 3 0 0 0 0 0 3 0 0 3 0 0 0 0 0 3 0 0 0 1
+1 0 0 0 0 0 9 0 0 0 0 0 0 0 0 0 9 0 0 0 0 0 0 1
+1 1 0 0 3 0 0 0 0 0 3 0 0 3 0 0 0 0 0 3 0 0 1 1
+1 4 4 0 3 0 0 0 0 3 3 0 0 3 3 0 0 0 0 3 0 4 4 1
+1 4 0 0 0 0 0 0 0 0 0 7 0 0 0 0 0 0 0 0 0 0 4 1
+1 1 0 0 5 0 0 0 0 5 5 0 0 5 5 0 0 0 0 5 0 0 1 1
+1 0 0 0 5 0 0 0 0 0 5 0 0 5 0 0 0 0 0 5 0 0 0 1
+1 0 0 0 0 0 8 0 0 0 0 0 0 0 0 0 8 0 0 0 0 0 0 1
+1 0 0 0 5 0 0 0 0 0 5 0 0 5 0 0 0 0 0 5 0 0 0 1
+1 0 0 0 5 5 0 0 0 3 0 0 0 0 3 0 0 0 5 5 0 0 0 1
+1 0 9 0 0 0 0 7 0 0 0 0 0 0 0 0 7 0 0 0 0 9 0 1
+1 1 0 0 1 1 1 0 0 1 1 1 1 1 1 0 0 1 1 1 0 6 1 1
+1 0 0 0 6 0 0 0 0 0 0 6 6 0 0 0 0 0 0 0 0 0 0 1
+1 0 7 0 6 0 8 0 0 0 0 0 0 0 0 0 9 0 0 0 7 0 0 1
+1 0 0 0 1 0 0 0 0 0 0 1 1 0 0 0 0 0 0 0 0 0 0 1
+1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1
