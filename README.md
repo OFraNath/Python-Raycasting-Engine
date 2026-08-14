@@ -28,8 +28,12 @@ O diferencial é o sistema de iluminação dinâmica: luzes seguem a lei do inve
 - Global Illumination simplificada (bounce de luz nas paredes)
 - Billboards: sprites 2D sempre de frente pra câmera, com oclusão por profundidade (Fase 5)
 - Texturas em sRGB com correção de gamma automática, com fallback para cor sólida
+- Ciclo de dia e noite opcional, com sol, lua e estrelas (seção `[SKY]`)
+- Sistema de partículas animadas (flutuando/orbitando), além dos billboards estáticos
 - Formato de mapa próprio (`.rcfg`), simples de editar em qualquer editor de texto
+- Editor visual de mapas (`editor.html`), rodando direto no navegador
 - Drag & drop de arquivos `.rcfg` direto na janela do jogo, para trocar de mapa sem reiniciar
+- Hot-reload: o mapa carregado recarrega sozinho ao ser salvo/editado no disco, e a posição do jogador é preservada
 
 ---
 
@@ -39,7 +43,8 @@ O diferencial é o sistema de iluminação dinâmica: luzes seguem a lei do inve
 RAYCASTING-ENGINE/
 ├── Raycasting.pyw        # arquivo principal — execute este
 ├── requirements.txt
-├── editor.html           # editor de mapas .rcfg
+├── editor.html           # editor visual de mapas .rcfg (abre no navegador)
+├── showcase.rcfg         # mapa de demonstração (céu dinâmico + partículas)
 ├── LICENSE
 ├── README.md
 ├── demos/                # demos em formato .rcfg
@@ -81,8 +86,8 @@ RAYCASTING-ENGINE/
 ### Instalação
 
 ```bash
-git clone https://github.com/SEU-USUARIO/RAYCASTING-ENGINE.git
-cd RAYCASTING-ENGINE
+git clone https://github.com/<seu-usuario>/Python-Raycasting-Engine.git
+cd Python-Raycasting-Engine
 pip install -r requirements.txt
 ```
 
@@ -100,7 +105,11 @@ Carregando um mapa específico `.rcfg` diretamente:
 python Raycasting.pyw mapas/backrooms/backrooms.rcfg
 ```
 
-> **Dica:** com o jogo já em execução, arraste e solte qualquer arquivo `.rcfg` dentro da janela para trocar de mapa instantaneamente, sem precisar reiniciar.
+> **Dica:** com o jogo já em execução, arraste e solte qualquer arquivo `.rcfg` dentro da janela para trocar de mapa instantaneamente, sem precisar reiniciar. Além disso, o mapa **atualmente carregado** tem hot-reload: se você editar e salvar o `.rcfg` no disco, o jogo detecta a mudança e recarrega sozinho, preservando a posição do jogador.
+
+### Editor visual de mapas
+
+O repositório inclui `editor.html`, um editor de mapas `.rcfg` que roda direto no navegador (sem servidor). Basta abrir o arquivo localmente para montar o grid, configurar texturas/luzes/céu e exportar o `.rcfg`.
 
 ---
 
@@ -113,6 +122,8 @@ python Raycasting.pyw mapas/backrooms/backrooms.rcfg
 | `Mouse` | Rotacionar câmera / olhar para cima e para baixo |
 | `Esc` | Alternar captura do mouse (travar/destravar cursor) |
 | `R` | Resetar posição do jogador para o `SPAWN` original do mapa |
+| `,` / `.` | Retroceder / avançar o horário do céu (30 min por toque) |
+| `P` | Pausar / retomar o ciclo de dia e noite |
 
 ---
 
@@ -252,15 +263,49 @@ Sintaxe: `ID COR_HEX RAIO`
 ```
 Tocha com luz alaranjada e alcance de 6 blocos. No formato novo, o `ID` de `1` a `9` corresponde aos tokens `L1`..`L9` usados na grade do `[MAP]`.
 
+#### `[SKY]` — ciclo de dia e noite (opcional)
+
+Sem essa seção, o céu permanece estático, só com o gradiente do `[THEME]`. Com ela, a engine desenha sol, lua e estrelas, e pode animar a passagem do tempo:
+
+```ini
+[SKY]
+cycle true
+day_length 120
+start_time 8
+sun_color #fff2c0
+moon_color #b9c6e0
+stars 140
+```
+
+| Chave | Padrão | Descrição |
+| :--- | :--- | :--- |
+| `cycle` | `false` | Se `true`, o horário avança sozinho enquanto o jogo roda |
+| `day_length` | `120` | Duração de um dia completo, em segundos reais |
+| `start_time` | `8` | Horário inicial do "dia de jogo" (`0` a `24`) |
+| `sun_color` | `#fff2c0` | Cor do sol |
+| `moon_color` | `#b9c6e0` | Cor da lua |
+| `stars` | `140` | Quantidade de estrelas desenhadas à noite |
+
+O horário também pode ser ajustado manualmente em tempo real com as teclas `,` `.` (avançar/retroceder) e `P` (pausar/retomar), veja a seção **⌨️ Controles** abaixo.
+
 #### `[BILLBOARDS]` — sprites sempre de frente pra câmera
 
-Sintaxe: `ID caminho/relativo/imagem.png offset_y`
+Sintaxe: `ID caminho/relativo/imagem.png offset_y [escala]`
 
 ```
 1 sprites/vaso_planta.png 0.0
-2 sprites/orbe_flutuante.png 0.9
+2 sprites/orbe_flutuante.png 0.9 1.5
 ```
-`offset_y` é a elevação em blocos em relação ao chão (`0.0` = encostado no chão, valores maiores = flutuando). Os `ID`s de `1` a `9` correspondem aos tokens `B1`..`B9` usados na grade do `[MAP]`. Cada instância de billboard é atravessável e sempre encara a câmera, recebendo oclusão correta contra as paredes do DDA.
+`offset_y` é a elevação em blocos em relação ao chão (`0.0` = encostado no chão, valores maiores = flutuando). `escala` é opcional (padrão `1.0`) e multiplica o tamanho do sprite, que por padrão ocupa 1 unidade de mundo de altura. Os `ID`s de `1` a `9` correspondem aos tokens `B1`..`B9` usados na grade do `[MAP]`. Cada instância de billboard é atravessável e sempre encara a câmera, recebendo oclusão correta contra as paredes do DDA.
+
+#### `[PARTICLES]` — sprites animados (flutuando)
+
+Sintaxe: `ID caminho/relativo/imagem.png quantidade velocidade espalhamento`
+
+```
+1 sprites/orbe_flutuante.png 8 0.6 4
+```
+Igual a um billboard, mas gera várias instâncias do sprite flutuando ao redor da célula com movimento animado. `quantidade` (padrão `8`) é o número de partículas por célula, `velocidade` (padrão `0.5`) controla a rapidez do movimento e `espalhamento` (padrão `0.4`) o raio de dispersão ao redor do ponto central. Os `ID`s de `1` a `9` correspondem aos tokens `P1`..`P9` usados na grade do `[MAP]`.
 
 #### `[MAP]` — layout do nível
 
@@ -270,6 +315,7 @@ Matriz de tokens separados por espaço, vírgula ou ponto e vírgula:
 - `1` a `6`: paredes (definidas em `[TEXTURES]` ou `[COLORS]`)
 - `L1` a `L9`: fontes de luz (definidas em `[LIGHTS]`)
 - `B1` a `B9`: billboards (definidos em `[BILLBOARDS]`)
+- `P1` a `P9`: partículas animadas (definidas em `[PARTICLES]`)
 
 *(O formato legado ainda é aceito: `7` ou mais = luzes definidas em `[LIGHTS]` com o mesmo número.)*
 
