@@ -10,6 +10,16 @@ O diferencial é o sistema de iluminação dinâmica: luzes seguem a lei do inve
 
 ---
 
+## 📸 Screenshots
+
+<p align="center">
+  <img src="https://github.com/user-attachments/assets/e51838fc-f34e-46a2-ab9b-2edbbdc29427" width="32%" />
+  <img src="https://github.com/user-attachments/assets/a6ac940d-5160-4813-a369-a2e82ee8fe7b" width="32%" />
+  <img src="https://github.com/user-attachments/assets/cbd49320-b23f-4157-9c81-798e501583c1" width="32%" />
+</p>
+
+---
+
 ## ✨ Principais recursos
 
 - Renderização por pixel no fragment shader (GPU real, não CPU)
