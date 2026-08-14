@@ -2,7 +2,7 @@
 
 Engine de renderização pseudo-3D inspirada no estilo clássico de *Wolfenstein 3D*, mas executada **diretamente no Fragment Shader (GPU)** usando Pygame, ModernGL e OpenGL (GLSL 330) — em vez do raycasting tradicional feito coluna por coluna na CPU.
 
-O diferencial é o sistema de iluminação dinâmica: luzes seguem a lei do inverso do quadrado, projetam sombras suavizadas (penumbra) e ainda reemitem luz indiretamente nas paredes vizinhas (GI/Bounce), tudo calculado em tempo real no shader.
+O diferencial é o sistema de iluminação dinâmica: luzes seguem a lei do inverso do quadrado, projetam sombras suavizadas (penumbra) e ainda reemitem luz indiretamente nas paredes vizinhas (GI/Bounce), tudo calculado previamente assim que o .rcfg é carregado.
 
 ![status](https://img.shields.io/badge/status-em%20desenvolvimento-yellow)
 ![python](https://img.shields.io/badge/python-3.8%2B-blue)
