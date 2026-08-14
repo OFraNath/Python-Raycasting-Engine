@@ -178,6 +178,39 @@ angle 0
 - `x`, `y`: posição no grid do mapa
 - `angle`: ângulo inicial da câmera, em graus (`0` a `360`)
 
+#### `[TITLE]` — título mostrado na janela do jogo
+
+Texto puro na linha, sem chave:
+
+```
+[TITLE]
+🔮 O TEMPLO DOS CRISTAIS DE LUZ
+```
+
+#### `[INFO]` — metadados do mapa
+
+Chaves livres, exibidas no HUD/info:
+
+```
+NAME Meu Mapa
+AUTHOR Fulano
+```
+
+#### `[THEME]` — cores da interface e do ambiente
+
+Todas as chaves aceitam um hex (`#rrggbb`):
+
+```
+SKY_BASE #1a1a3a       # topo do céu (mais escuro)
+SKY_TOP #4a3b6e        # base do céu (no horizonte)
+FLOOR_BASE #1e1e24     # chão perto do horizonte
+FLOOR_TOP #3a3a4d      # chão perto da câmera
+CROSSHAIR #00ffff      # retículo central
+HUD_LIGHT #00ffcc      # cor de luz no HUD
+HUD_ALERT #ffcc00      # alertas no HUD
+MINIMAP_PLAYER #00ffff # jogador no minimapa
+```
+
 #### `[COLORS]` — paredes sem textura
 
 Sintaxe: `ID COR_FACES_NORTE_SUL COR_FACES_LESTE_OESTE`
