@@ -1,4 +1,4 @@
-# Raycasting FP Engine (GPU Edition)
+# Raycasting FP Engine (Edição GPU)
 
 Engine de renderização pseudo-3D inspirada no estilo clássico de *Wolfenstein 3D*, mas executada **diretamente no Fragment Shader (GPU)** usando Pygame, ModernGL e OpenGL (GLSL 330) — em vez do raycasting tradicional feito coluna por coluna na CPU.
 
