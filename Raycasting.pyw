@@ -166,12 +166,13 @@ def _parse_spawn(d, mapa, orb_min):
 
     def livre(fx, fy):
         ix, iy = int(fx), int(fy)
-        return 0 <= ix < w and 0 <= iy < h and (mapa[iy][ix] == 0 or mapa[iy][ix] >= orb_min)
+        v = mapa[iy][ix] if (0 <= ix < w and 0 <= iy < h) else None
+        return v is not None and v != INVISIBLE_WALL and (v == 0 or v >= orb_min)
 
     if not livre(x, y):
         for j in range(h):
             for i in range(w):
-                if mapa[j][i] == 0 or mapa[j][i] >= orb_min:
+                if mapa[j][i] != INVISIBLE_WALL and (mapa[j][i] == 0 or mapa[j][i] >= orb_min):
                     x, y = i + 0.5, j + 0.5
                     break
             else:
@@ -252,13 +253,21 @@ ORB_MIN_LEGADO = 7
 WALL_MAX_NOVO = 9
 ORB_MIN_NOVO = 100  # offset interno alto, só pra não colidir com paredes 1-9
 
+# Parede invisível ("N" no [MAP]): bloqueia o jogador (is_wall) mas fica fora da
+# faixa 1..WALL_MAX que o shader testa pra desenhar/colidir com o raio — então
+# nunca é renderizada nem aparece no minimapa. Um único tipo, sem cor/textura.
+# Valor 99: fica no vão livre entre WALL_MAX_NOVO (9) e ORB_MIN_NOVO (100), então
+# também não é confundido com luz/orb pelo shader (que testa "t >= u_orbMin").
+INVISIBLE_WALL = 99
+
 
 def _process_map_tokens(raw_rows):
-    # Detecta automaticamente se o mapa usa o formato novo (com L/B) ou o
+    # Detecta automaticamente se o mapa usa o formato novo (com L/B/N) ou o
     # legado (só dígitos) — assim mapas antigos continuam funcionando
     # exatamente como antes, sem precisar de nenhuma migração manual.
     is_new_format = any(
-        len(tok) >= 2 and tok[0].upper() in ("L", "B") and tok[1:].isdigit()
+        (len(tok) >= 2 and tok[0].upper() in ("L", "B") and tok[1:].isdigit())
+        or tok.upper() == "N"
         for row in raw_rows for tok in row
     )
     wall_max = WALL_MAX_NOVO if is_new_format else WALL_MAX_LEGADO
@@ -281,6 +290,8 @@ def _process_map_tokens(raw_rows):
                     raise ValueError(f"billboard {tok!r}: índice deve ser 1-9")
                 billboards.append((i + 0.5, j + 0.5, n))
                 int_row.append(0)  # célula em si é chão livre, andável
+            elif up == "N":
+                int_row.append(INVISIBLE_WALL)
             else:
                 try:
                     int_row.append(int(tok))
@@ -291,11 +302,13 @@ def _process_map_tokens(raw_rows):
 
 
 def _parse_billboards(d, pasta_base):
-    # Seção [BILLBOARDS]: "ID caminho/imagem.png offset_y"
+    # Seção [BILLBOARDS]: "ID caminho/imagem.png offset_y [escala]"
     # offset_y é a distância vertical (unidades de mundo) entre o chão e a
     # base do sprite — 0.0 encosta no chão, valores positivos deixam o
     # sprite "flutuando" a uma altura fixa (ex: pés de um personagem que
     # deve tocar o chão visualmente, mas a imagem tem uma margem embaixo).
+    # escala é opcional (default 1.0) — multiplica o tamanho do sprite,
+    # que por padrão ocupa 1 unidade de mundo de altura.
     billboards = {}
     for tipo, valor in d.items():
         try:
@@ -307,7 +320,8 @@ def _parse_billboards(d, pasta_base):
         if not caminho_rel:
             continue
         offset_y = float(partes[1]) if len(partes) >= 2 and partes[1] else 0.0
-        billboards[tipo_int] = (os.path.join(pasta_base, caminho_rel), offset_y)
+        escala = float(partes[2]) if len(partes) >= 3 and partes[2] else 1.0
+        billboards[tipo_int] = (os.path.join(pasta_base, caminho_rel), offset_y, escala)
     return billboards
 
 
@@ -336,7 +350,7 @@ def load_rcfg(caminho):
 
     billboard_defs = _parse_billboards(dados.get("BILLBOARDS", {}), pasta_base)
     billboard_instances = [
-        (x, y, billboard_defs[tipo][0], billboard_defs[tipo][1])
+        (x, y, billboard_defs[tipo][0], billboard_defs[tipo][1], billboard_defs[tipo][2])
         for (x, y, tipo) in billboard_cells
         if tipo in billboard_defs
     ]
@@ -565,7 +579,7 @@ def is_orb(c):
 
 
 def is_wall(c):
-    return 1 <= c <= WALL_MAX
+    return (1 <= c <= WALL_MAX) or c == INVISIBLE_WALL
 
 
 def _los_blocked_f(x0, y0, x1, y1):
@@ -793,6 +807,7 @@ uniform vec2 u_bbPos[32];
 uniform float u_bbLayer[32];
 uniform float u_bbYOff[32];
 uniform float u_bbAspect[32];  // largura/altura original de cada sprite (Problema 4 do PLANO.md)
+uniform float u_bbScale[32];   // multiplicador de tamanho por instância (escala do .rcfg)
 uniform sampler2DArray u_bbTex;
 
 uniform vec3 u_skyB, u_skyT, u_floorB, u_floorT;
@@ -970,7 +985,7 @@ void main() {
             if (ty <= 0.05 || ty >= wallDepth || ty >= bestDepth) continue;
 
             float screenX = (u_res.x * 0.5) * (1.0 + tx / ty);
-            float size = u_scale / ty;   // sprite de 1 unidade de mundo (altura), mesma escala das paredes (lineH)
+            float size = (u_scale / ty) * u_bbScale[b];   // sprite de 1 unidade de mundo (altura) × escala do .rcfg
             float aspect = u_bbAspect[b];
             float sizeX = size * aspect; // largura na tela segue a proporção original da imagem
             float sizeY = size;
@@ -1288,7 +1303,7 @@ def upload_textures():
     # (ver upload de uniforms no loop principal). Sprites sem imagem
     # (caminho inválido) caem no fallback xadrez magenta, igual às paredes.
     bb_camadas = np.zeros((BILLBOARD_LAYERS, tam[1], tam[0], 4), dtype=np.uint8)
-    caminhos_billboards = sorted({caminho for (_, _, caminho, _) in BILLBOARDS})[:BILLBOARD_LAYERS]
+    caminhos_billboards = sorted({caminho for (_, _, caminho, _, _) in BILLBOARDS})[:BILLBOARD_LAYERS]
     aspects_billboards = [1.0] * BILLBOARD_LAYERS
     for idx, caminho_abs in enumerate(caminhos_billboards):
         arr, aspect = load_asset_image(caminho_abs, tam, contain=True)
@@ -1310,7 +1325,7 @@ def upload_textures():
     _BB_ASPECT_BY_PATH = {c: aspects_billboards[i] for i, c in enumerate(caminhos_billboards)}
 
 
-def load_map_file(caminho):
+def load_map_file(caminho, preserve_position=False):
     global MAP, MAP_W, MAP_H, WALL_COLORS, WALL_TEXTURES, TEXTURE_SIZE, THEME, LIGHT_ORBS, AMBIENT, FOG, LIGHT_RES
     global LIGHT_SOFT_SAMPLES, LIGHT_SOFT_RADIUS, LIGHT_BOUNCE, LIGHT_BOUNCE_RADIUS, LIGHT_BOUNCE_PASSES
     global WIDTH, HEIGHT, FOV, MAX_DEPTH, MOVE_SPEED, RUN_MULTIPLIER, MOUSE_SENS_X
@@ -1348,8 +1363,11 @@ def load_map_file(caminho):
     THEME["title"] = data["title"] or THEME["title"]
     LIGHT_ORBS = data["lights"]
     SPAWN = data["spawn"]
-    px, py, pangle = SPAWN
-    look_y = 0
+    if not preserve_position:
+        # hot-reload (fastloading, ver PLANO.md) pula este reset pra manter o
+        # jogador exatamente onde estava enquanto o .rcfg é editado ao vivo.
+        px, py, pangle = SPAWN
+        look_y = 0
     WALL_MAX = data["wall_max"]
     ORB_MIN = data["orb_min"]
     BILLBOARDS = data["billboards"]
@@ -1378,6 +1396,18 @@ def main():
         load_map_file(caminho)
         restore_saved_position(caminho)
 
+    # ── fastloading (PLANO.md item 4): observa o .rcfg em disco e recarrega
+    # sozinho quando o editor salva, sem resetar o jogador pro SPAWN. ──
+    hot_reload_last_check = time_sec()
+    hot_reload_seen_stamp = None   # (mtime, size) já carregado/tentado com sucesso
+    hot_reload_pending_stamp = None  # (mtime, size) visto na checagem anterior, aguardando confirmação de estabilidade
+    if caminho:
+        try:
+            st = os.stat(caminho)
+            hot_reload_seen_stamp = (st.st_mtime, st.st_size)
+        except OSError:
+            pass
+
     captured = True
     pygame.mouse.set_visible(not captured)
     pygame.event.set_grab(captured)
@@ -1396,6 +1426,39 @@ def main():
     while running:
         dt = clock.tick(FPS_CAP) / 1000.0
         dt = max(0.0, min(0.1, dt))
+
+        # ── fastloading: checa o arquivo a cada ~0.5s (não a cada frame) ──
+        if caminho is not None:
+            now_check = time_sec()
+            if now_check - hot_reload_last_check >= 0.5:
+                hot_reload_last_check = now_check
+                try:
+                    st = os.stat(caminho)
+                    stamp = (st.st_mtime, st.st_size)
+                except OSError:
+                    stamp = None
+                if stamp is not None and stamp != hot_reload_seen_stamp:
+                    if stamp == hot_reload_pending_stamp:
+                        # mesmo tamanho/mtime em duas checagens seguidas: o save
+                        # do editor já terminou de escrever, é seguro recarregar.
+                        hot_reload_seen_stamp = stamp
+                        hot_reload_pending_stamp = None
+                        try:
+                            save_current_position(caminho)
+                            load_map_file(caminho, preserve_position=True)
+                            restore_saved_position(caminho)
+                        except Exception:
+                            import traceback
+                            try:
+                                log = os.path.join(os.path.dirname(os.path.abspath(__file__)), "erro.log")
+                                with open(log, "a", encoding="utf-8") as f:
+                                    f.write(f"[hot-reload] falha ao recarregar {caminho}:\n")
+                                    traceback.print_exc(file=f)
+                            except Exception:
+                                pass
+                    else:
+                        hot_reload_pending_stamp = stamp
+
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
                 running = False
@@ -1405,6 +1468,13 @@ def main():
                     caminho = e.file
                     load_map_file(caminho)
                     restore_saved_position(caminho)
+                    hot_reload_seen_stamp = None
+                    hot_reload_pending_stamp = None
+                    try:
+                        st = os.stat(caminho)
+                        hot_reload_seen_stamp = (st.st_mtime, st.st_size)
+                    except OSError:
+                        pass
             elif e.type == pygame.KEYDOWN:
                 if e.key == pygame.K_ESCAPE:
                     captured = not captured
@@ -1415,6 +1485,12 @@ def main():
                     if caminho is not None:
                         load_map_file(caminho)  # já deixa px,py,pangle,look_y no SPAWN do arquivo
                         save_current_position(caminho)  # sobrescreve o cache com o reset
+                        hot_reload_pending_stamp = None
+                        try:
+                            st = os.stat(caminho)
+                            hot_reload_seen_stamp = (st.st_mtime, st.st_size)
+                        except OSError:
+                            pass
             elif e.type == pygame.MOUSEBUTTONDOWN and not captured:
                 captured = True
                 pygame.mouse.set_visible(False)
@@ -1497,23 +1573,31 @@ def main():
         bb_layer = [0.0] * MAX_BILLBOARD_INSTANCES
         bb_yoff = [0.0] * MAX_BILLBOARD_INSTANCES
         bb_aspect = [1.0] * MAX_BILLBOARD_INSTANCES
-        for idx, (bx, by, caminho_abs, yoff) in enumerate(bb_instances):
+        bb_scale = [1.0] * MAX_BILLBOARD_INSTANCES
+        for idx, (bx, by, caminho_abs, yoff, escala) in enumerate(bb_instances):
             bb_pos[idx] = (bx, by)
             bb_layer[idx] = float(_BB_LAYER_BY_PATH.get(caminho_abs, 0))
             bb_yoff[idx] = yoff
             bb_aspect[idx] = float(_BB_ASPECT_BY_PATH.get(caminho_abs, 1.0))
+            bb_scale[idx] = escala
         prog["u_bbCount"].value = len(bb_instances)
         prog["u_bbPos"].value = bb_pos
         prog["u_bbLayer"].value = bb_layer
         prog["u_bbYOff"].value = bb_yoff
         prog["u_bbAspect"].value = bb_aspect
+        prog["u_bbScale"].value = bb_scale
 
         prog["u_mmPos"].value = (mm_x, mm_y)
         prog["u_mmSize"].value = (mm_w, mm_h)
         prog["u_mmCell"].value = float(mm_cell)
         prog["u_playerPix"].value = (mm_x + px * mm_cell, mm_y + py * mm_cell)
-        prog["u_dirPix"].value = (mm_x + (px + math.cos(pangle) * 2.2) * mm_cell,
-                                  mm_y + (py + math.sin(pangle) * 2.2) * mm_cell)
+        # distância (em células) entre o ponto do player e a ponta do ponteiro de
+        # direção no minimapa — reduzida pra ficarem mais próximos, com piso de
+        # segurança pra não sobrepor os dois círculos (r=3.5px + r=2.5px=6px) em
+        # mapas grandes onde mm_cell fica pequeno.
+        mm_dir_dist = max(0.9, 6.0 / mm_cell)
+        prog["u_dirPix"].value = (mm_x + (px + math.cos(pangle) * mm_dir_dist) * mm_cell,
+                                  mm_y + (py + math.sin(pangle) * mm_dir_dist) * mm_cell)
 
         tex_map.use(0)
         if tex_light is not None:
