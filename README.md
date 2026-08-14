@@ -193,11 +193,9 @@ Matriz de inteiros separados por espaço, vírgula ou ponto e vírgula:
 
 ## 🗺️ Mapas de exemplo
 
-A pasta [`mapas/`](./mapas) já vem com alguns exemplos prontos para testar:
+A pasta [`mapas/`](./mapas) já vem com alguns exemplos prontos para testar.
 
-- `backrooms/backrooms.rcfg` — ambiente estilo Backrooms, com textura de parede própria
-- `festa_colorida.rcfg` — mapa cheio de luzes coloridas, bom para testar o sistema de iluminação
-- `teste_iluminação.rcfg` — mapa focado em testar sombras e GI
+- Basta arrastar o .rcfg do mapa que preferir para dentro da janela do Raycasting
 
 ---
 
