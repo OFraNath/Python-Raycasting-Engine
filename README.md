@@ -40,20 +40,34 @@ RAYCASTING-ENGINE/
 ├── Raycasting.pyw        # arquivo principal — execute este
 ├── requirements.txt
 ├── editor.html           # editor de mapas .rcfg
-├── mapas/                # mapas de exemplo em formato .rcfg
-│   ├── backrooms/
-│   │   ├── backrooms.rcfg
-│   │   └── sprites/
-│   │       └── wall.jpg
-│   ├── demo_billboards/
+├── LICENSE
+├── README.md
+├── demos/                # demos em formato .rcfg
+│   ├── billboards/
 │   │   ├── demo_billboards.rcfg
 │   │   └── sprites/
-│   ├── demo_waifu_billboard/
-│   │   ├── waifu.rcfg
-│   │   └── sprites/
+│   │       ├── orbe_flutuante.png
+│   │       └── vaso_planta.png
 │   ├── festa_colorida.rcfg
-│   └── teste_iluminação.rcfg
-└── LICENSE
+│   ├── graphics/
+│   │   ├── Global Illumination.rcfg
+│   │   └── Shader.rcfg
+│   └── waifu_billboard/
+│       ├── waifu_billboard.rcfg
+│       └── sprites/
+│           ├── folder.png
+│           ├── waifu.jpg
+│           └── youtube.webp
+└── mapas/                # mapas de exemplo em formato .rcfg
+    ├── backrooms/
+    │   ├── backrooms.rcfg
+    │   └── sprites/
+    │       └── wall.jpg
+    └── garden/
+        ├── garden.rcfg
+        └── sprites/
+            ├── garden.png
+            └── grass.webp
 ```
 
 ---
