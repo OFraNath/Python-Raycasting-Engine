@@ -40,6 +40,7 @@ DEFAULT_CONFIG = {
     "light_bounce_radius": 1.6,
     "light_bounce_passes": 2,
     "texture_size": 256,
+    "wall_scale": 1.0,
 }
 
 LIGHT_RES_VALIDOS = (1, 2, 4, 8, 16, 32)
@@ -152,6 +153,7 @@ def _parse_config(d):
     cfg["light_bounce_radius"] = _to_float(d.get("light_bounce_radius", 1.6), "LIGHT_BOUNCE_RADIUS")
     cfg["light_bounce_passes"] = max(1, _to_int(d.get("light_bounce_passes", 2), "LIGHT_BOUNCE_PASSES"))
     cfg["texture_size"] = max(2, _to_int(d.get("texture_size", 256), "TEXTURE_SIZE"))
+    cfg["wall_scale"] = _to_float(d.get("wall_scale", 1.0), "WALL_SCALE")
     return cfg
 
 
@@ -411,6 +413,7 @@ LIGHT_SOFT_RADIUS = DEFAULT_CONFIG["light_soft_radius"]
 LIGHT_BOUNCE = DEFAULT_CONFIG["light_bounce"]
 LIGHT_BOUNCE_RADIUS = DEFAULT_CONFIG["light_bounce_radius"]
 LIGHT_BOUNCE_PASSES = DEFAULT_CONFIG["light_bounce_passes"]
+WALL_SCALE = DEFAULT_CONFIG["wall_scale"]
 light_grid = []
 light_grid_np = None
 LIGHT_W = MAP_W
@@ -765,6 +768,7 @@ uniform vec2 u_dir;
 uniform vec2 u_plane;
 uniform vec2 u_mapSize;
 uniform float u_horizon;
+uniform float u_scale;
 uniform float u_ambient;
 uniform float u_fog;
 uniform float u_depth;
@@ -889,7 +893,7 @@ void main() {
         float texU = fract((side == 0) ? hitWorld.y : hitWorld.x);
         float hasTexFlag = hasWallTex(float(wtype));
 
-        float lineH = u_res.y / perpDist;
+        float lineH = u_scale / perpDist;
         float wallTop = horizon - lineH * 0.5;
         float wallBottom = horizon + lineH * 0.5;
 
@@ -921,9 +925,9 @@ void main() {
             
             color = wcolFinal * sideShade * (1.0 - fogv);
         } else if (row > wallBottom) {
-            float rowDist = (u_res.y * 0.5) / (row - horizon);
+            float rowDist = (u_scale * 0.5) / (row - horizon);
             vec2 fc = u_pos + rowDist * rayDir;
-            float depthT = (row - horizon) / (u_res.y * 0.5);
+            float depthT = (row - horizon) / (u_scale * 0.5);
             vec3 fcol = mix(u_floorB, u_floorT, clamp(depthT, 0.0, 1.0));
             vec3 lv = lightAt(fc);
             float fv = clamp((u_fog * rowDist) / u_depth, 0.0, 1.0);
@@ -933,9 +937,9 @@ void main() {
         }
     } else {
         if (row > horizon) {
-            float rowDist = (u_res.y * 0.5) / (row - horizon);
+            float rowDist = (u_scale * 0.5) / (row - horizon);
             vec2 fc = u_pos + rowDist * rayDir;
-            float depthT = (row - horizon) / (u_res.y * 0.5);
+            float depthT = (row - horizon) / (u_scale * 0.5);
             vec3 fcol = mix(u_floorB, u_floorT, clamp(depthT, 0.0, 1.0));
             vec3 lv = lightAt(fc);
             float fv = clamp((u_fog * rowDist) / u_depth, 0.0, 1.0);
@@ -966,14 +970,14 @@ void main() {
             if (ty <= 0.05 || ty >= wallDepth || ty >= bestDepth) continue;
 
             float screenX = (u_res.x * 0.5) * (1.0 + tx / ty);
-            float size = u_res.y / ty;   // sprite de 1 unidade de mundo (altura), mesma escala das paredes (lineH)
+            float size = u_scale / ty;   // sprite de 1 unidade de mundo (altura), mesma escala das paredes (lineH)
             float aspect = u_bbAspect[b];
             float sizeX = size * aspect; // largura na tela segue a proporção original da imagem
             float sizeY = size;
             float left = screenX - sizeX * 0.5;
             if (pix.x < left || pix.x > left + sizeX) continue;
 
-            float shift = u_bbYOff[b] * (u_res.y / ty);  // eleva o sprite do chão (offset_y do .rcfg)
+            float shift = u_bbYOff[b] * (u_scale / ty);  // eleva o sprite do chão (offset_y do .rcfg)
             float bottom = horizon + sizeY * 0.5 - shift;
             float top = bottom - sizeY;
             if (row < top || row > bottom) continue;
@@ -1227,7 +1231,7 @@ def load_map_file(caminho):
     global LIGHT_SOFT_SAMPLES, LIGHT_SOFT_RADIUS, LIGHT_BOUNCE, LIGHT_BOUNCE_RADIUS, LIGHT_BOUNCE_PASSES
     global WIDTH, HEIGHT, FOV, MAX_DEPTH, MOVE_SPEED, RUN_MULTIPLIER, MOUSE_SENS_X
     global MOUSE_SENS_Y, MAX_LOOK_Y, MM, SPAWN, px, py, pangle, look_y
-    global WALL_MAX, ORB_MIN, BILLBOARDS
+    global WALL_MAX, ORB_MIN, BILLBOARDS, WALL_SCALE
     data = load_rcfg(caminho)
     cfg = data["config"]
     WIDTH, HEIGHT = cfg["window_width"], cfg["window_height"]
@@ -1248,6 +1252,7 @@ def load_map_file(caminho):
     LIGHT_BOUNCE_RADIUS = cfg["light_bounce_radius"]
     LIGHT_BOUNCE_PASSES = cfg["light_bounce_passes"]
     TEXTURE_SIZE = cfg["texture_size"]
+    WALL_SCALE = cfg["wall_scale"]
 
     MAP = [row[:] for row in data["map"]]
     MAP_W = len(MAP[0])
@@ -1377,6 +1382,7 @@ def main():
         prog["u_plane"].value = (plane_x, plane_y)
         prog["u_mapSize"].value = (MAP_W, MAP_H)
         prog["u_horizon"].value = HEIGHT * 0.5 + look_y
+        prog["u_scale"].value = (HEIGHT / (2.0 * math.tan(FOV / 2))) * WALL_SCALE
         prog["u_ambient"].value = AMBIENT
         prog["u_fog"].value = FOG
         prog["u_depth"].value = float(MAX_DEPTH)

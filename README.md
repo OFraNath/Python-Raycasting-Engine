@@ -171,6 +171,7 @@ angle 0
 | `light_bounce_radius` | `1.6` | Raio de alcance do rebote de luz |
 | `light_bounce_passes` | `2` | Número de passes do rebote de luz |
 | `texture_size` | `256` | Tamanho de redimensionamento padrão das texturas importadas |
+| `wall_scale` | `1.0` | Fator de altura das paredes: `1.0` = quadradas/proporcionais, `> 1` = mais finas e altas, `< 1` = mais grossas e baixas |
 
 #### `[SPAWN]` — posição inicial
 

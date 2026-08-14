@@ -155,7 +155,8 @@ const DEFAULT_CONFIG = {
   move_speed:0.06, run_multiplier:1.8, mouse_sens_x:0.004, mouse_sens_y:1.0,
   max_look_y:240, fog:1.4, gradient_steps:14, ambient:0.07, floor_bands:3,
   floor_step:2, light_res:1, light_soft_samples:6, light_soft_radius:0.4,
-  light_bounce:0.35, light_bounce_radius:1.6, light_bounce_passes:2, texture_size:256
+  light_bounce:0.35, light_bounce_radius:1.6, light_bounce_passes:2, texture_size:256,
+  wall_scale:1
 };
 const LIGHT_RES_VALIDOS = [1,2,4,8,16,32];
 const THEME_KEYS = ["sky_base","sky_top","floor_base","floor_top","crosshair",
@@ -311,6 +312,7 @@ function loadRcfg(text){
   s.config.light_bounce_radius = parseFloat(cfg.light_bounce_radius ?? 1.6);
   s.config.light_bounce_passes = Math.max(1, parseInt(cfg.light_bounce_passes ?? 2));
   s.config.texture_size = Math.max(2, parseInt(cfg.texture_size ?? 256));
+  s.config.wall_scale = parseFloat(cfg.wall_scale ?? 1.0);
 
   const sp = dados.SPAWN || {};
   s.spawn = {x: parseFloat(sp.x ?? 1.5), y: parseFloat(sp.y ?? 1.5), angle: parseFloat(sp.angle ?? 0)};
@@ -391,6 +393,7 @@ function serializeRcfg(s){
   L.push(`LIGHT_BOUNCE_RADIUS ${s.config.light_bounce_radius}`);
   L.push(`LIGHT_BOUNCE_PASSES ${s.config.light_bounce_passes}`);
   L.push(`TEXTURE_SIZE ${s.config.texture_size}`);
+  L.push(`WALL_SCALE ${s.config.wall_scale}`);
   L.push("");
   L.push("[SPAWN]");
   L.push(`X ${s.spawn.x}`);
@@ -721,6 +724,7 @@ function panelConfig(root){
   fs3.appendChild(field("Floor bands", state.config.floor_bands, v=>state.config.floor_bands=v, {type:"number"}));
   fs3.appendChild(field("Floor step", state.config.floor_step, v=>state.config.floor_step=v, {type:"number"}));
   fs3.appendChild(field("Texture size", state.config.texture_size, v=>state.config.texture_size=v, {type:"number"}));
+  fs3.appendChild(field("Wall scale", state.config.wall_scale, v=>state.config.wall_scale=v, {type:"number", step:"0.1"}));
   root.appendChild(fs3);
 }
 
