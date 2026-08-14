@@ -1,11 +1,4 @@
-# ============================================================
-#  RAYCASTING FPS — Demo de Billboards (Fase 5)
-#  Sala pequena pra demonstrar sprites sempre-de-frente-pra-câmera:
-#  B1 = vaso de planta encostado no chão (offset 0.0)
-#  B2 = orbe flutuante (offset > 0, "pés" a uma altura fixa do chão)
-#  B2 também fica parcialmente atrás de uma parede (coluna em 6,3)
-#  pra validar a oclusão correta contra o DDA de paredes.
-# ============================================================
+# Gerado pelo RCFG Editor
 [CONFIG]
 WINDOW 960 560
 MM 150
@@ -13,20 +6,23 @@ FOV 70
 NUM_RAYS 220
 MAX_DEPTH 30
 MOVE_SPEED 0.06
+RUN_MULTIPLIER 1.8
 MOUSE_SENS_X 0.004
-MOUSE_SENS_Y 1.0
+MOUSE_SENS_Y 1
 MAX_LOOK_Y 240
 FOG 0.6
 GRADIENT_STEPS 14
-AMBIENT 0.30
+AMBIENT 0.3
 FLOOR_BANDS 4
 FLOOR_STEP 2
-LIGHT_RES 8
+LIGHT_RES 16
 LIGHT_SOFT_SAMPLES 6
 LIGHT_SOFT_RADIUS 0.5
 LIGHT_BOUNCE 0.35
-LIGHT_BOUNCE_RADIUS 2.0
-WALL_SCALE 1.0
+LIGHT_BOUNCE_RADIUS 2
+LIGHT_BOUNCE_PASSES 2
+TEXTURE_SIZE 256
+WALL_SCALE 1
 
 [SPAWN]
 X 2.5
@@ -58,7 +54,7 @@ MINIMAP_PLAYER #ffe6b3
 🪴 DEMO DE BILLBOARDS
 
 [BILLBOARDS]
-1 sprites/vaso_planta.png 0.0
+1 sprites/vaso_planta.png 0
 2 sprites/orbe_flutuante.png 0.9
 
 [MAP]

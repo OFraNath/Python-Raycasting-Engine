@@ -1,8 +1,4 @@
-# ============================================================
-#  RAYCASTING FPS — Sala escura com blocos de luz (orbes)
-#  Ambiente naturalmente escuro; orbes (tipo 7) iluminam ao redor.
-#  Orbes são atravessáveis: coloque onde haveria um '0'.
-# ============================================================
+# Gerado pelo RCFG Editor
 [CONFIG]
 WINDOW 960 560
 MM 140
@@ -10,20 +6,23 @@ FOV 70
 NUM_RAYS 200
 MAX_DEPTH 30
 MOVE_SPEED 0.06
+RUN_MULTIPLIER 1.8
 MOUSE_SENS_X 0.004
-MOUSE_SENS_Y 1.0
+MOUSE_SENS_Y 1
 MAX_LOOK_Y 240
 FOG 1.2
 GRADIENT_STEPS 14
 AMBIENT 0.07
 FLOOR_BANDS 3
 FLOOR_STEP 2
-LIGHT_RES 8
+LIGHT_RES 16
 LIGHT_SOFT_SAMPLES 6
 LIGHT_SOFT_RADIUS 0.4
 LIGHT_BOUNCE 0.35
 LIGHT_BOUNCE_RADIUS 1.6
-WALL_SCALE 1.0
+LIGHT_BOUNCE_PASSES 2
+TEXTURE_SIZE 256
+WALL_SCALE 1
 
 [SPAWN]
 X 1.5

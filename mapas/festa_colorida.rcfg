@@ -1,7 +1,4 @@
-# ============================================================
-#  RAYCASTING FPS — O Templo dos Cristais de Luz
-#  Mapa expandido, sem salas bloqueadas, alta luminosidade.
-# ============================================================
+# Gerado pelo RCFG Editor
 [CONFIG]
 WINDOW 960 560
 MM 160
@@ -9,20 +6,23 @@ FOV 75
 NUM_RAYS 240
 MAX_DEPTH 35
 MOVE_SPEED 0.07
+RUN_MULTIPLIER 1.8
 MOUSE_SENS_X 0.004
-MOUSE_SENS_Y 1.0
+MOUSE_SENS_Y 1
 MAX_LOOK_Y 240
 FOG 0.5
 GRADIENT_STEPS 16
 AMBIENT 0.35
 FLOOR_BANDS 4
 FLOOR_STEP 2
-LIGHT_RES 8
+LIGHT_RES 16
 LIGHT_SOFT_SAMPLES 8
 LIGHT_SOFT_RADIUS 0.5
-LIGHT_BOUNCE 0.50
-LIGHT_BOUNCE_RADIUS 2.0
-WALL_SCALE 1.0
+LIGHT_BOUNCE 0.5
+LIGHT_BOUNCE_RADIUS 2
+LIGHT_BOUNCE_PASSES 2
+TEXTURE_SIZE 256
+WALL_SCALE 1
 
 [SPAWN]
 X 2.5
@@ -42,7 +42,7 @@ AUTHOR Gemini
 6 #ff8c00 #b35900
 
 [LIGHTS]
-1 #fff8e7 5.0
+1 #fff8e7 5
 2 #00ffff 4.5
 3 #ff00ff 4.5
 

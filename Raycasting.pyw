@@ -1048,27 +1048,111 @@ void main() {
 
 # ══ TELA DE CARREGAMENTO (Fase 2) ════════════════════════════════
 def _make_progress_drawer(width, height, label):
-    # Cria uma janela simples (superfície 2D comum, sem moderngl/OpenGL —
-    # não precisa, e assim não compete com a inicialização "pesada" do
-    # contexto GL) e devolve uma função draw(pct) que redesenha uma barra
-    # de progresso. Usada como callback dentro de compute_light_grid().
+    # Desenha a barra de progresso NA PRÓPRIA janela OpenGL via moderngl,
+    # em vez de abrir uma janela 2D separada com pygame.display.set_mode().
+    #
+    # Por quê: set_mode() sem a flag OPENGL destrói a janela/contexto GL que
+    # já está de pé (init_display) e, quando a janela é recriada logo depois
+    # (resize_window), os objetos do moderngl (prog/vao) continuam apontando
+    # pro contexto morto — o resultado era tela preta ao carregar mapas
+    # grandes (≥ 4096 células, que é quando a barra aparece). Aqui o quadro
+    # é montado numa superfície 2D offscreen e enviado como textura pra um
+    # quad em tela cheia, então o contexto GL nunca é mexido.
+    #
+    # Usada como callback dentro de compute_light_grid().
     pygame.init()
     pygame.font.init()
-    screen = pygame.display.set_mode((max(320, width), max(120, height)))
-    pygame.display.set_caption("Carregando mapa...")
     font = pygame.font.SysFont(None, 26)
 
+    if ctx is None:
+        # Defensivo: sem contexto GL ainda (não acontece nos fluxos atuais,
+        # onde a barra só roda depois de init_display), cai pro comportamento
+        # antigo de janela 2D simples.
+        screen = pygame.display.set_mode((max(320, width), max(120, height)))
+        pygame.display.set_caption("Carregando mapa...")
+
+        def draw(pct):
+            pct = max(0.0, min(1.0, pct))
+            w, h = screen.get_size()
+            screen.fill((12, 12, 18))
+            bar_w, bar_h = int(w * 0.6), 22
+            bx, by = (w - bar_w) // 2, h // 2
+            pygame.draw.rect(screen, (55, 55, 68), (bx, by, bar_w, bar_h), border_radius=6)
+            pygame.draw.rect(screen, (90, 200, 160), (bx, by, int(bar_w * pct), bar_h), border_radius=6)
+            pygame.draw.rect(screen, (120, 120, 140), (bx, by, bar_w, bar_h), width=1, border_radius=6)
+            txt = font.render(f"{label} — {int(pct * 100)}%", True, (230, 230, 230))
+            screen.blit(txt, (bx, by - 32))
+            # processa a fila de eventos pra o SO não achar que o app travou
+            # (mensagem "não está respondendo") durante o cálculo pesado.
+            pygame.event.pump()
+            pygame.display.flip()
+
+        draw(0.0)
+        return draw
+
+    sw, sh = ctx.screen.width, ctx.screen.height
+    surf = pygame.Surface((sw, sh))
+    bar_w, bar_h = int(sw * 0.6), 22
+    bx, by = (sw - bar_w) // 2, sh // 2
+
+    prog_loading = None
+    vao_loading = None
+    quad_tex = None
+
+    def _ensure_gl():
+        nonlocal prog_loading, vao_loading
+        if prog_loading is not None:
+            return
+        prog_loading = ctx.program(vertex_shader="""
+#version 330 core
+in vec2 in_pos;
+in vec2 in_uv;
+out vec2 uv;
+void main() {
+    uv = in_uv;
+    gl_Position = vec4(in_pos, 0.0, 1.0);
+}
+""", fragment_shader="""
+#version 330 core
+in vec2 uv;
+out vec4 outColor;
+uniform sampler2D u_tex;
+void main() {
+    outColor = texture(u_tex, uv);
+}
+""")
+        verts = np.array([
+            -1, -1, 0, 0,
+             1, -1, 1, 0,
+             1,  1, 1, 1,
+            -1, -1, 0, 0,
+             1,  1, 1, 1,
+            -1,  1, 0, 1,
+        ], dtype="f4")
+        vbo = ctx.buffer(verts.tobytes())
+        vao_loading = ctx.vertex_array(prog_loading, vbo, "in_pos", "in_uv")
+
     def draw(pct):
+        nonlocal quad_tex
         pct = max(0.0, min(1.0, pct))
-        w, h = screen.get_size()
-        screen.fill((12, 12, 18))
-        bar_w, bar_h = int(w * 0.6), 22
-        bx, by = (w - bar_w) // 2, h // 2
-        pygame.draw.rect(screen, (55, 55, 68), (bx, by, bar_w, bar_h), border_radius=6)
-        pygame.draw.rect(screen, (90, 200, 160), (bx, by, int(bar_w * pct), bar_h), border_radius=6)
-        pygame.draw.rect(screen, (120, 120, 140), (bx, by, bar_w, bar_h), width=1, border_radius=6)
+        surf.fill((12, 12, 18))
+        pygame.draw.rect(surf, (55, 55, 68), (bx, by, bar_w, bar_h), border_radius=6)
+        pygame.draw.rect(surf, (90, 200, 160), (bx, by, int(bar_w * pct), bar_h), border_radius=6)
+        pygame.draw.rect(surf, (120, 120, 140), (bx, by, bar_w, bar_h), width=1, border_radius=6)
         txt = font.render(f"{label} — {int(pct * 100)}%", True, (230, 230, 230))
-        screen.blit(txt, (bx, by - 32))
+        surf.blit(txt, (bx, by - 32))
+        # o GL trata o eixo Y ao contrário do pygame: tobytes(flipped=True)
+        # já devolve as linhas de baixo pra cima (primeiro texel = canto
+        # inferior), que é a ordem que o quad espera em (0,0)=inferior.
+        data = pygame.image.tobytes(surf, "RGBA", True)
+        _ensure_gl()
+        if quad_tex is not None:
+            quad_tex.release()
+        quad_tex = ctx.texture((sw, sh), 4, data)
+        quad_tex.use(0)
+        prog_loading["u_tex"].value = 0
+        ctx.viewport = (0, 0, sw, sh)
+        vao_loading.render(mode=moderngl.TRIANGLES)
         # processa a fila de eventos pra o SO não achar que o app travou
         # (mensagem "não está respondendo") durante o cálculo pesado.
         pygame.event.pump()
@@ -1464,7 +1548,7 @@ def main():
             if shot:
                 w = ctx.screen.width
                 h = ctx.screen.height
-                data = ctx.read(viewport=(0, 0, w, h), components=3)
+                data = ctx.screen.read(viewport=(0, 0, w, h), components=3)
                 arr = np.frombuffer(data, dtype=np.uint8).reshape(h, w, 3)[::-1]
                 from PIL import Image
                 Image.fromarray(arr, "RGB").save(shot)
