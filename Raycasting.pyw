@@ -8,6 +8,7 @@ import math
 import pygame
 import moderngl
 import numpy as np
+from PIL import Image
 
 
 # ══ CARREGADOR DE MAPAS (.RCFG) ══════════════════════════════════
@@ -422,6 +423,7 @@ BILLBOARDS = []
 MAX_BILLBOARD_INSTANCES = 32   # limite de sprites simultâneos no mapa
 BILLBOARD_LAYERS = 9           # nº de "slots" de textura únicos suportados
 _BB_LAYER_BY_PATH = {}         # caminho_abs -> índice de camada no array da GPU
+_BB_ASPECT_BY_PATH = {}        # caminho_abs -> aspect ratio (largura/altura) original
 tex_bbTex = None
 
 # ── Tela de carregamento (Fase 2) ──
@@ -465,40 +467,94 @@ def _rgb(h):
 _ASSET_CACHE = {}
 
 
-def _fallback_surface(tamanho):
+def _fallback_array(tamanho):
     # Xadrez magenta/preto — "textura de erro" clássica, bem visível, pra
     # avisar que um asset referenciado no .rcfg não foi encontrado sem
     # travar o carregamento do mapa inteiro.
     w, h = tamanho
-    surf = pygame.Surface((w, h), pygame.SRCALPHA)
+    arr = np.zeros((h, w, 4), dtype=np.uint8)
     cel = max(1, min(w, h) // 8)
     magenta = (255, 0, 255, 255)
     preto = (0, 0, 0, 255)
     for j in range(0, h, cel):
         for i in range(0, w, cel):
             cor = magenta if ((i // cel) + (j // cel)) % 2 == 0 else preto
-            surf.fill(cor, pygame.Rect(i, j, cel, cel))
-    return surf
+            arr[j:j + cel, i:i + cel] = cor
+    return arr
 
 
-def load_asset_image(caminho_abs, tamanho):
+def load_asset_image(caminho_abs, tamanho, contain=False):
     # Todo caminho de asset já deve chegar aqui RESOLVIDO (absoluto),
     # relativo à pasta do .rcfg — ver load_rcfg(). tamanho é obrigatório
     # aqui pq o texture array da GPU exige que todas as camadas tenham o
-    # mesmo tamanho (ver upload_wall_textures).
-    key = (caminho_abs, tamanho)
+    # mesmo tamanho (ver upload_wall_textures / upload_textures).
+    #
+    # Usa Pillow em vez de pygame.image.load: suporte a WEBP mais confiável
+    # e detecção de canal alpha mais previsível, independente de como o
+    # pygame/SDL_image local foi compilado (Problema 3 do PLANO.md).
+    #
+    # Retorna (array_rgba_uint8 do tamanho pedido, aspect_ratio_original).
+    # Com contain=True (billboards), a imagem é redimensionada preservando
+    # a proporção original e centralizada num quadro `tamanho`, com a
+    # sobra preenchida em alpha 0 — sem contain (paredes), a imagem é
+    # esticada direto pro tamanho pedido, como antes (Problema 4).
+    key = (caminho_abs, tamanho, contain)
     cached = _ASSET_CACHE.get(key)
     if cached is not None:
         return cached
+
     try:
-        surf = pygame.image.load(caminho_abs).convert_alpha()
+        raw = Image.open(caminho_abs)
+        # Detecta se a imagem de origem tem canal alpha ANTES do convert()
+        # forçado abaixo, já que convert("RGBA") sempre adiciona um canal A
+        # (opaco) mesmo pra formatos sem transparência (ex. JPG).
+        has_alpha = ("A" in raw.getbands()) or ("transparency" in raw.info)
+        img = raw.convert("RGBA")
     except Exception as e:
         print(f"[assets] falha ao carregar {caminho_abs!r}: {e}", flush=True)
-        surf = _fallback_surface(tamanho)
-    if surf.get_size() != tamanho:
-        surf = pygame.transform.smoothscale(surf, tamanho)
-    _ASSET_CACHE[key] = surf
-    return surf
+        arr = _fallback_array(tamanho)
+        result = (arr, 1.0)
+        _ASSET_CACHE[key] = result
+        return result
+
+    if not has_alpha:
+        print(
+            f"[assets] {caminho_abs!r} não tem canal alpha — vai aparecer "
+            f"com fundo sólido",
+            flush=True,
+        )
+
+    w, h = img.size
+    aspect = (w / h) if h else 1.0
+
+    # "Unmatte": zera o RGB de pixels quase totalmente transparentes antes
+    # do resize. Neutraliza matte branco/lixo assado na borda de PNGs
+    # "transparentes" mal exportados, sem precisar reexportar a arte —
+    # e de quebra evita que esse lixo vaze pra dentro da borda durante o
+    # resize suave / mipmaps (Problema 2 do PLANO.md).
+    arr = np.array(img, dtype=np.uint8)
+    alpha_f = arr[:, :, 3].astype(np.float32) / 255.0
+    quase_transparente = alpha_f < 0.02
+    if np.any(quase_transparente):
+        arr[quase_transparente] = 0
+        img = Image.fromarray(arr, "RGBA")
+
+    tw, th = tamanho
+    if contain and w > 0 and h > 0:
+        scale = min(tw / w, th / h)
+        new_w = max(1, round(w * scale))
+        new_h = max(1, round(h * scale))
+        resized = img.resize((new_w, new_h), Image.LANCZOS)
+        canvas = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
+        canvas.paste(resized, ((tw - new_w) // 2, (th - new_h) // 2), resized)
+        img = canvas
+    elif (w, h) != (tw, th):
+        img = img.resize((tw, th), Image.LANCZOS)
+
+    final_arr = np.ascontiguousarray(np.array(img, dtype=np.uint8))
+    result = (final_arr, aspect)
+    _ASSET_CACHE[key] = result
+    return result
 
 
 def is_orb(c):
@@ -732,6 +788,7 @@ uniform int u_bbCount;
 uniform vec2 u_bbPos[32];
 uniform float u_bbLayer[32];
 uniform float u_bbYOff[32];
+uniform float u_bbAspect[32];  // largura/altura original de cada sprite (Problema 4 do PLANO.md)
 uniform sampler2DArray u_bbTex;
 
 uniform vec3 u_skyB, u_skyT, u_floorB, u_floorT;
@@ -909,16 +966,29 @@ void main() {
             if (ty <= 0.05 || ty >= wallDepth || ty >= bestDepth) continue;
 
             float screenX = (u_res.x * 0.5) * (1.0 + tx / ty);
-            float size = u_res.y / ty;   // sprite de 1 unidade de mundo, mesma escala das paredes (lineH)
-            float left = screenX - size * 0.5;
-            if (pix.x < left || pix.x > left + size) continue;
+            float size = u_res.y / ty;   // sprite de 1 unidade de mundo (altura), mesma escala das paredes (lineH)
+            float aspect = u_bbAspect[b];
+            float sizeX = size * aspect; // largura na tela segue a proporção original da imagem
+            float sizeY = size;
+            float left = screenX - sizeX * 0.5;
+            if (pix.x < left || pix.x > left + sizeX) continue;
 
             float shift = u_bbYOff[b] * (u_res.y / ty);  // eleva o sprite do chão (offset_y do .rcfg)
-            float bottom = horizon + size * 0.5 - shift;
-            float top = bottom - size;
+            float bottom = horizon + sizeY * 0.5 - shift;
+            float top = bottom - sizeY;
             if (row < top || row > bottom) continue;
 
-            vec2 uvBB = vec2((pix.x - left) / size, (row - top) / size);
+            // A textura guarda a imagem com "contain" (proporção preservada,
+            // centralizada num quadro quadrado com padding transparente) —
+            // como o quad na tela já usa a proporção certa (sizeX/sizeY),
+            // a amostragem precisa focar só na região não-padding do
+            // quadro, senão o sprite fica menor dentro do próprio quad
+            // (Problema 4 do PLANO.md).
+            float fx = min(1.0, aspect);
+            float fy = min(1.0, 1.0 / aspect);
+            float ux = (pix.x - left) / sizeX;
+            float uy = (row - top) / sizeY;
+            vec2 uvBB = vec2(ux * fx + (1.0 - fx) * 0.5, uy * fy + (1.0 - fy) * 0.5);
             vec4 s = texture(u_bbTex, vec3(uvBB, u_bbLayer[b]));
             if (s.a < 0.05) continue;
 
@@ -1111,9 +1181,8 @@ def upload_textures():
     for t, caminho_abs in WALL_TEXTURES.items():
         if not (1 <= t <= TEXTURE_LAYERS):
             continue
-        surf = load_asset_image(caminho_abs, tam)
-        pixels = pygame.image.tostring(surf, "RGBA")
-        camadas[t - 1] = np.frombuffer(pixels, dtype=np.uint8).reshape(tam[1], tam[0], 4)
+        arr, _aspect = load_asset_image(caminho_abs, tam)
+        camadas[t - 1] = arr
         has_tex[t, 0] = 1.0
 
     tex_wallArr = ctx.texture_array((tam[0], tam[1], TEXTURE_LAYERS), 4, camadas.tobytes())
@@ -1132,19 +1201,25 @@ def upload_textures():
     # (caminho inválido) caem no fallback xadrez magenta, igual às paredes.
     bb_camadas = np.zeros((BILLBOARD_LAYERS, tam[1], tam[0], 4), dtype=np.uint8)
     caminhos_billboards = sorted({caminho for (_, _, caminho, _) in BILLBOARDS})[:BILLBOARD_LAYERS]
+    aspects_billboards = [1.0] * BILLBOARD_LAYERS
     for idx, caminho_abs in enumerate(caminhos_billboards):
-        surf = load_asset_image(caminho_abs, tam)
-        pixels = pygame.image.tostring(surf, "RGBA")
-        bb_camadas[idx] = np.frombuffer(pixels, dtype=np.uint8).reshape(tam[1], tam[0], 4)
+        arr, aspect = load_asset_image(caminho_abs, tam, contain=True)
+        bb_camadas[idx] = arr
+        aspects_billboards[idx] = aspect
     tex_bbTex = ctx.texture_array((tam[0], tam[1], BILLBOARD_LAYERS), 4, bb_camadas.tobytes())
     tex_bbTex.filter = (moderngl.LINEAR, moderngl.LINEAR)
     tex_bbTex.repeat_x = False
     tex_bbTex.repeat_y = False
-    tex_bbTex.build_mipmaps()
-    # guarda o mapeamento caminho -> índice de camada pra montar os
-    # uniforms de instância (posição/camada/offset) no loop principal.
-    global _BB_LAYER_BY_PATH
+    # Sem build_mipmaps() aqui de propósito (Problema 2 do PLANO.md):
+    # billboards não tileiam feito paredes, então minificação suave não
+    # compensa o risco de a GPU misturar RGB de texels opacos da borda com
+    # texels vizinhos totalmente transparentes ao gerar os mip levels —
+    # isso é o que causava a linha clara/escura contornando o sprite.
+    # guarda o mapeamento caminho -> índice de camada/aspect pra montar os
+    # uniforms de instância (posição/camada/offset/aspect) no loop principal.
+    global _BB_LAYER_BY_PATH, _BB_ASPECT_BY_PATH
     _BB_LAYER_BY_PATH = {c: i for i, c in enumerate(caminhos_billboards)}
+    _BB_ASPECT_BY_PATH = {c: aspects_billboards[i] for i, c in enumerate(caminhos_billboards)}
 
 
 def load_map_file(caminho):
@@ -1331,14 +1406,17 @@ def main():
         bb_pos = [(0.0, 0.0)] * MAX_BILLBOARD_INSTANCES
         bb_layer = [0.0] * MAX_BILLBOARD_INSTANCES
         bb_yoff = [0.0] * MAX_BILLBOARD_INSTANCES
+        bb_aspect = [1.0] * MAX_BILLBOARD_INSTANCES
         for idx, (bx, by, caminho_abs, yoff) in enumerate(bb_instances):
             bb_pos[idx] = (bx, by)
             bb_layer[idx] = float(_BB_LAYER_BY_PATH.get(caminho_abs, 0))
             bb_yoff[idx] = yoff
+            bb_aspect[idx] = float(_BB_ASPECT_BY_PATH.get(caminho_abs, 1.0))
         prog["u_bbCount"].value = len(bb_instances)
         prog["u_bbPos"].value = bb_pos
         prog["u_bbLayer"].value = bb_layer
         prog["u_bbYOff"].value = bb_yoff
+        prog["u_bbAspect"].value = bb_aspect
 
         prog["u_mmPos"].value = (mm_x, mm_y)
         prog["u_mmSize"].value = (mm_w, mm_h)

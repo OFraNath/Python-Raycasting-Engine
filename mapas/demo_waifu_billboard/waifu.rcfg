@@ -52,9 +52,9 @@ MINIMAP_PLAYER #00ffff
 🔮 Waifu
 
 [BILLBOARDS]
-1 waifu.jpg 0
-2 folder.png -0.1
-3 youtube.webp 0
+1 sprites/waifu.jpg 0
+2 sprites/folder.png 0
+3 sprites/youtube.webp 0
 
 [MAP]
 1 1 1 1 1 1 1 1 1 1 1 1

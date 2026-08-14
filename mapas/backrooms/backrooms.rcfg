@@ -37,9 +37,7 @@ AUTHOR Nathan
 2 #222222 #111111
 
 [TEXTURES]
-# Aponta direto para a sua imagem na mesma pasta:
-1 wall.jpg
-# ID 2 não tem textura declarada aqui, então usará a cor sólida de [COLORS]!
+1 sprites/wall.jpg
 
 [LIGHTS]
 1 #fff2a1 5.5
