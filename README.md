@@ -179,7 +179,7 @@ Sintaxe: `ID COR_HEX RAIO`
 ```
 7 #ff8800 6.0
 ```
-Torcha com luz alaranjada e alcance de 6 blocos.
+Tocha com luz alaranjada e alcance de 6 blocos.
 
 #### `[MAP]` — layout do nível
 
