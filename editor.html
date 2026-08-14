@@ -201,7 +201,7 @@ function freshState(){
 let state = freshState();
 let tool = {kind:"wall", n:1}; // kind: empty | wall | light | billboard
 let painting = false;
-let paintValue = null;
+let paintErase = false;
 let lastMousePos = {i: 0, j: 0}; // Armazena a última posição do mouse
 
 /* ───────────────────────── PARSER (mirror _parse_sections) ───────────────────────── */
@@ -247,7 +247,8 @@ function processMapTokens(rawRows){
   let isNew = false;
   for(const row of rawRows) for(const tok of row){
     const up = tok.toUpperCase();
-    if(up.length>=2 && (up[0]==="L"||up[0]==="B") && /^\d+$/.test(up.slice(1))){ isNew = true; break; }
+    if(up.length>=2 && (up[0]==="L"||up[0]==="B"||up[0]==="P") && /^\d+$/.test(up.slice(1))){ isNew = true; break; }
+    if(up==="N" || up.includes("+")){ isNew = true; break; }
   }
   const grid = [];
   const legacyLightRemap = {}; // legacy digit -> new n (1..)
@@ -255,12 +256,35 @@ function processMapTokens(rawRows){
     const outRow = [];
     for(const tok of row){
       const up = tok.toUpperCase();
-      if(up.length>=2 && up[0]==="L" && /^\d+$/.test(up.slice(1))){
+      if(up.includes("+")){
+        // token composto (PLANO.md item 4): "base+L#+B#+P#" — preserva
+        // camadas em vez de descartá-las (mesmo bug de raiz do item 6,
+        // agora pro separador "+").
+        const partes = up.split("+");
+        const baseTok = partes[0];
+        let outBase = "0";
+        if(baseTok==="N") outBase = "N";
+        else if(/^\d+$/.test(baseTok)) outBase = String(parseInt(baseTok,10));
+        const outExtras = [];
+        const vistas = new Set();
+        for(const extra of partes.slice(1)){
+          if(extra.length>=2 && (extra[0]==="L"||extra[0]==="B"||extra[0]==="P") && /^\d+$/.test(extra.slice(1)) && !vistas.has(extra[0])){
+            vistas.add(extra[0]);
+            outExtras.push(extra[0]+parseInt(extra.slice(1),10));
+          }
+        }
+        outRow.push([outBase, ...outExtras].join("+"));
+      } else if(up.length>=2 && up[0]==="L" && /^\d+$/.test(up.slice(1))){
         const n = parseInt(up.slice(1),10);
         outRow.push("L"+n);
       } else if(up.length>=2 && up[0]==="B" && /^\d+$/.test(up.slice(1))){
         const n = parseInt(up.slice(1),10);
         outRow.push("B"+n);
+      } else if(up.length>=2 && up[0]==="P" && /^\d+$/.test(up.slice(1))){
+        const n = parseInt(up.slice(1),10);
+        outRow.push("P"+n);
+      } else if(up==="N"){
+        outRow.push("N");
       } else if(/^\d+$/.test(tok)){
         const d = parseInt(tok,10);
         if(!isNew && d>=7){
@@ -493,22 +517,64 @@ function paletteHTML(){
     mk("billboard",n,`B${n}${has?"":" (sem img)"}`, has ? "#e0a458" : "#2a2521");
   }
 
+  h("Partículas P1–P9");
+  for(let n=1;n<=9;n++){
+    mk("particle",n,`P${n}`,"#7fd8b0");
+  }
+
   const hint = document.createElement("div"); hint.className="hint";
   hint.innerHTML = "<b>Atalhos:</b> 0–9 parede/vazio · Del apaga<br>"+
     "Ctrl+Z desfaz · Ctrl+Y refaz<br>"+
     "Shift+arraste = retângulo<br>"+
     "Ctrl+roda = zoom no cursor<br>"+
-    "Botão direito arrastando = apagar";
+    "Botão direito = apaga só a camada da ferramenta ativa";
   el.appendChild(hint);
 }
 
+function parseToken(tok){
+  // Divide um token do [MAP] em {base, extras}: base é "0"/dígito/"N", extras
+  // é um objeto {L?:n, B?:n, P?:n} — no máx. 1 índice por letra (item 4).
+  const parts = String(tok).split("+");
+  let base = parts[0];
+  const extras = {};
+  for(const p of parts.slice(1)){
+    if(p.length>=2 && "LBP".includes(p[0]) && /^\d+$/.test(p.slice(1))) extras[p[0]] = parseInt(p.slice(1),10);
+  }
+  // formato antigo/solto: token inteiro é "L#"/"B#"/"P#" sem "+" → base implícita "0"
+  if(base.length>=2 && "LBP".includes(base[0]) && /^\d+$/.test(base.slice(1))){
+    extras[base[0]] = parseInt(base.slice(1),10);
+    base = "0";
+  }
+  return {base, extras};
+}
+function composeToken(base, extras){
+  const parts = [base];
+  for(const L of ["L","B","P"]) if(extras[L]!=null) parts.push(L+extras[L]);
+  return parts.join("+");
+}
 function tokenFor(kind,n){
   if(kind==="empty") return "0";
   if(kind==="invisible") return "N";
   if(kind==="wall") return String(n);
   if(kind==="light") return "L"+n;
   if(kind==="billboard") return "B"+n;
+  if(kind==="particle") return "P"+n;
   return "0";
+}
+// Pinta a ferramenta atual em cima do token existente, preservando as
+// camadas que não pertencem à ferramenta selecionada (PLANO.md item 4):
+// ferramentas de Terreno (empty/wall/invisible) só mexem na base; ferramentas
+// de camada (light/billboard/particle) só adicionam/removem seu próprio "+X".
+function applyPaint(oldTok, kind, n, erase){
+  const {base, extras} = parseToken(oldTok);
+  if(kind==="empty" || kind==="wall" || kind==="invisible"){
+    const newBase = erase ? "0" : (kind==="invisible" ? "N" : kind==="wall" ? String(n) : "0");
+    return composeToken(newBase, extras);
+  }
+  const letter = kind==="light" ? "L" : kind==="billboard" ? "B" : "P";
+  const newExtras = {...extras};
+  if(erase) delete newExtras[letter]; else newExtras[letter] = n;
+  return composeToken(base, newExtras);
 }
 
 /* ───────────────────────── CANVAS ───────────────────────── */
@@ -541,8 +607,10 @@ function scheduleDraw(){
 
 // desenha o conteúdo de uma célula (assume que ctx já está com o transform certo)
 function renderCellShape(i,j){
-  const tok = state.map[j][i];
+  const {base, extras} = parseToken(state.map[j][i]);
+  const tok = base;
   const x=i*cell, y=j*cell;
+  const extraList = ["L","B","P"].filter(L=>extras[L]!=null);
   if(tok==="0"){
     ctx.fillStyle = ((i+j)%2===0) ? "#161310" : "#131009";
     ctx.fillRect(x,y,cell,cell);
@@ -573,6 +641,11 @@ function renderCellShape(i,j){
     ctx.setLineDash([]);
     ctx.globalAlpha=1;
   }
+  extraList.forEach((letter,k)=>{
+    const cor = letter==="L" ? "#ffdd88" : letter==="B" ? "#e0a458" : "#7fd8b0";
+    ctx.fillStyle = cor;
+    ctx.beginPath(); ctx.arc(x+cell*(0.18+k*0.22), y+cell*0.18, cell*0.1, 0, Math.PI*2); ctx.fill();
+  });
   ctx.strokeStyle="#000000"; ctx.globalAlpha=0.35;
   ctx.strokeRect(x+.5,y+.5,cell-1,cell-1);
   ctx.globalAlpha=1;
@@ -618,13 +691,27 @@ function drawViewport(){
   drawSpawnMarker(i0,j0,i1,j1);
 }
 
-// redesenha só a célula (i,j) — usado durante pintura pra evitar redraw da viewport inteira
-function drawCell(i,j){
-  ctx.setTransform(1,0,0,1,-scrollX,-scrollY);
-  ctx.clearRect(i*cell, j*cell, cell, cell);
-  renderCellShape(i,j);
-  const si = Math.floor(state.spawn.x), sj = Math.floor(state.spawn.y);
-  if(si===i && sj===j) drawSpawnMarker(i,j,i,j);
+// redesenha a célula (i,j) e suas vizinhas para não "cortar" marcadores/luzes que vazam de borda
+function drawCell(i, j) {
+  const rows = state.map.length, cols = state.map[0]?.length || 0;
+  
+  const i0 = Math.max(0, i - 1);
+  const j0 = Math.max(0, j - 1);
+  const i1 = Math.min(cols - 1, i + 1);
+  const j1 = Math.min(rows - 1, j + 1);
+
+  ctx.setTransform(1, 0, 0, 1, -scrollX, -scrollY);
+
+  // limpa e desenha o fundo/terreno de toda a vizinhança afetada
+  for (let cJ = j0; cJ <= j1; cJ++) {
+    for (let cI = i0; cI <= i1; cI++) {
+      ctx.clearRect(cI * cell, cJ * cell, cell, cell);
+      renderCellShape(cI, cJ);
+    }
+  }
+
+  // redesenha o marcador do player garantindo que não fique "comido"
+  drawSpawnMarker(i0, j0, i1, j1);
 }
 
 wrap.addEventListener("scroll", scheduleDraw, {passive:true});
@@ -638,11 +725,14 @@ function cellFromEvent(e){
 }
 
 function bumpStat(tok, delta){
-  if(/^\d$/.test(tok) && tok!=="0"){
+  const {base, extras} = parseToken(tok);
+  if(/^\d+$/.test(base) && base!=="0"){
     document.getElementById("statWalls").textContent = (parseInt(document.getElementById("statWalls").textContent)||0)+delta;
-  } else if(tok[0]==="L"){
+  }
+  if(extras.L!=null){
     document.getElementById("statLights").textContent = (parseInt(document.getElementById("statLights").textContent)||0)+delta;
-  } else if(tok[0]==="B"){
+  }
+  if(extras.B!=null){
     document.getElementById("statBB").textContent = (parseInt(document.getElementById("statBB").textContent)||0)+delta;
   }
 }
@@ -650,9 +740,10 @@ function bumpStat(tok, delta){
 function computeStats(){
   let w=0,l=0,b=0;
   for(const row of state.map) for(const tok of row){
-    if(/^\d$/.test(tok) && tok!=="0") w++;
-    else if(tok[0]==="L") l++;
-    else if(tok[0]==="B") b++;
+    const {base, extras} = parseToken(tok);
+    if(/^\d+$/.test(base) && base!=="0") w++;
+    if(extras.L!=null) l++;
+    if(extras.B!=null) b++;
   }
   document.getElementById("statWalls").textContent = w;
   document.getElementById("statLights").textContent = l;
@@ -705,27 +796,29 @@ function redo(){
   toast("Refeito");
 }
 
-function paintAt(i,j){
+function paintAt(i,j,erase){
   const rows=state.map.length, cols=state.map[0]?.length||0;
   if(i<0||j<0||i>=cols||j>=rows) return;
   const old = state.map[j][i];
-  if(old===paintValue) return; // nada mudou, evita redraw à toa
+  const val = applyPaint(old, tool.kind, tool.n, erase);
+  if(old===val) return; // nada mudou, evita redraw à toa
   if(currentStroke) recordChange(i,j,old);
   bumpStat(old,-1);
-  state.map[j][i] = paintValue;
-  bumpStat(paintValue,1);
+  state.map[j][i] = val;
+  bumpStat(val,1);
   drawCell(i,j);
 }
 
-function fillRect(i0,j0,i1,j1,value){
+function fillRect(i0,j0,i1,j1,erase){
   const rows=state.map.length, cols=state.map[0]?.length||0;
   const lo_i=Math.max(0,Math.min(i0,i1)), hi_i=Math.min(cols-1,Math.max(i0,i1));
   const lo_j=Math.max(0,Math.min(j0,j1)), hi_j=Math.min(rows-1,Math.max(j0,j1));
   for(let j=lo_j;j<=hi_j;j++) for(let i=lo_i;i<=hi_i;i++){
     const old = state.map[j][i];
-    if(old===value) continue;
+    const val = applyPaint(old, tool.kind, tool.n, erase);
+    if(old===val) continue;
     if(currentStroke) recordChange(i,j,old);
-    bumpStat(old,-1); state.map[j][i]=value; bumpStat(value,1);
+    bumpStat(old,-1); state.map[j][i]=val; bumpStat(val,1);
   }
   scheduleDraw();
 }
@@ -736,14 +829,15 @@ let hoverEl = document.getElementById("hoverCoord");
 canvas.addEventListener("mousedown", e=>{
   if (e.button !== 0 && e.button !== 2) return;
   painting = true;
-  // Botão 0 (Esquerdo): usa a ferramenta selecionada.
-  // Botão 2 (Direito): força o valor a "0" (apagar).
-  paintValue = (e.button === 2) ? "0" : tokenFor(tool.kind, tool.n);
+  // Botão 0 (Esquerdo): pinta a ferramenta selecionada.
+  // Botão 2 (Direito): apaga só a camada da ferramenta selecionada
+  // (base -> "0"; light/billboard/particle -> remove o "+X" daquela letra).
+  paintErase = (e.button === 2);
   beginStroke();
   const {i,j} = cellFromEvent(e);
   lastMousePos = {i, j};
   if(e.shiftKey){ dragStart = {i,j}; }
-  else { dragStart=null; paintAt(i,j); }
+  else { dragStart=null; paintAt(i,j,paintErase); }
 });
 
 canvas.addEventListener("mousemove", e=>{
@@ -763,7 +857,7 @@ canvas.addEventListener("mousemove", e=>{
       ctx.lineWidth=1;
     });
   } else {
-    paintAt(i,j);
+    paintAt(i,j,paintErase);
   }
 });
 canvas.addEventListener("mouseleave", ()=>{ hoverEl.textContent="—"; });
@@ -772,7 +866,7 @@ canvas.addEventListener("mouseleave", ()=>{ hoverEl.textContent="—"; });
 window.addEventListener("mouseup", e=>{
   if(painting){
     if(dragStart){
-      fillRect(dragStart.i, dragStart.j, lastMousePos.i, lastMousePos.j, paintValue);
+      fillRect(dragStart.i, dragStart.j, lastMousePos.i, lastMousePos.j, paintErase);
     }
     painting = false;
     dragStart = null;
