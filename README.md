@@ -26,6 +26,7 @@ O diferencial é o sistema de iluminação dinâmica: luzes seguem a lei do inve
 - Iluminação dinâmica com queda de intensidade por inverso do quadrado
 - Sombras com penumbra suave (soft shadows)
 - Global Illumination simplificada (bounce de luz nas paredes)
+- Billboards: sprites 2D sempre de frente pra câmera, com oclusão por profundidade (Fase 5)
 - Texturas em sRGB com correção de gamma automática, com fallback para cor sólida
 - Formato de mapa próprio (`.rcfg`), simples de editar em qualquer editor de texto
 - Drag & drop de arquivos `.rcfg` direto na janela do jogo, para trocar de mapa sem reiniciar
@@ -38,10 +39,18 @@ O diferencial é o sistema de iluminação dinâmica: luzes seguem a lei do inve
 RAYCASTING-ENGINE/
 ├── Raycasting.pyw        # arquivo principal — execute este
 ├── requirements.txt
+├── editor.html           # editor de mapas .rcfg
 ├── mapas/                # mapas de exemplo em formato .rcfg
 │   ├── backrooms/
 │   │   ├── backrooms.rcfg
-│   │   └── wall.jpg
+│   │   └── sprites/
+│   │       └── wall.jpg
+│   ├── demo_billboards/
+│   │   ├── demo_billboards.rcfg
+│   │   └── sprites/
+│   ├── demo_waifu_billboard/
+│   │   ├── waifu.rcfg
+│   │   └── sprites/
 │   ├── festa_colorida.rcfg
 │   └── teste_iluminação.rcfg
 └── LICENSE
@@ -101,7 +110,7 @@ Mapas são arquivos de texto simples. O `.rcfg` deve ficar na mesma pasta das te
 
 ```ini
 [TITLE]
-value Mapa de Teste
+Mapa de Teste
 
 [CONFIG]
 window 960 560
@@ -124,11 +133,11 @@ angle 0
 1 texturas/parede_pedra.png
 
 [LIGHTS]
-7 #ffaa44 5.0
+1 #ffaa44 5.0
 
 [MAP]
 1 1 1 1 1
-1 0 0 7 1
+1 0 0 L1 1
 1 0 2 0 1
 1 0 0 0 1
 1 1 1 1 1
@@ -141,12 +150,26 @@ angle 0
 | Chave | Padrão | Descrição |
 | :--- | :--- | :--- |
 | `window` | `960 560` | Resolução da janela (`largura altura`) |
+| `mm` | `140` | Tamanho da janela do minimapa em pixels |
 | `fov` | `60` | Campo de visão da câmera, em graus |
-| `ambient` | `0.07` | Intensidade da luz ambiente global (`0.0` a `1.0`) |
+| `num_rays` | `180` | Número de raios por coluna da tela |
+| `max_depth` | `30` | Alcance máximo dos raios, em blocos |
+| `move_speed` | `0.06` | Velocidade de caminhada por frame |
+| `run_multiplier` | `1.8` | Multiplicador de velocidade ao correr (`Shift`) |
+| `mouse_sens_x` | `0.004` | Sensibilidade horizontal do mouse |
+| `mouse_sens_y` | `1.0` | Sensibilidade vertical do mouse |
+| `max_look_y` | `240` | Ângulo máximo de olhar para cima/baixo |
 | `fog` | `1.4` | Intensidade da névoa por distância |
+| `gradient_steps` | `14` | Número de faixas do gradiente de céu |
+| `ambient` | `0.07` | Intensidade da luz ambiente global (`0.0` a `1.0`) |
+| `floor_bands` | `4` | Número de faixas do gradiente de chão |
+| `floor_step` | `2` | Progressão de escurecimento entre as faixas do chão |
 | `light_res` | `1` | Subdivisão da grade de luz por bloco (`1, 2, 4, 8, 16, 32`); valores maiores dão gradientes de luz mais precisos, com custo de performance |
 | `light_soft_samples` | `6` | Número de amostras usadas na penumbra das sombras |
+| `light_soft_radius` | `0.4` | Raio de espalhamento da penumbra |
 | `light_bounce` | `0.35` | Intensidade do rebote de luz nas paredes (GI) |
+| `light_bounce_radius` | `1.6` | Raio de alcance do rebote de luz |
+| `light_bounce_passes` | `2` | Número de passes do rebote de luz |
 | `texture_size` | `256` | Tamanho de redimensionamento padrão das texturas importadas |
 
 #### `[SPAWN]` — posição inicial
@@ -177,17 +200,30 @@ A imagem é tratada em espaço de cor sRGB, com correção de gamma 2.2 aplicada
 Sintaxe: `ID COR_HEX RAIO`
 
 ```
-7 #ff8800 6.0
+1 #ff8800 6.0
 ```
-Tocha com luz alaranjada e alcance de 6 blocos.
+Tocha com luz alaranjada e alcance de 6 blocos. No formato novo, o `ID` de `1` a `9` corresponde aos tokens `L1`..`L9` usados na grade do `[MAP]`.
+
+#### `[BILLBOARDS]` — sprites sempre de frente pra câmera
+
+Sintaxe: `ID caminho/relativo/imagem.png offset_y`
+
+```
+1 sprites/vaso_planta.png 0.0
+2 sprites/orbe_flutuante.png 0.9
+```
+`offset_y` é a elevação em blocos em relação ao chão (`0.0` = encostado no chão, valores maiores = flutuando). Os `ID`s de `1` a `9` correspondem aos tokens `B1`..`B9` usados na grade do `[MAP]`. Cada instância de billboard é atravessável e sempre encara a câmera, recebendo oclusão correta contra as paredes do DDA.
 
 #### `[MAP]` — layout do nível
 
-Matriz de inteiros separados por espaço, vírgula ou ponto e vírgula:
+Matriz de tokens separados por espaço, vírgula ou ponto e vírgula:
 
 - `0`: espaço vazio (área percorrível)
 - `1` a `6`: paredes (definidas em `[TEXTURES]` ou `[COLORS]`)
-- `7` ou mais: fontes de luz (definidas em `[LIGHTS]`)
+- `L1` a `L9`: fontes de luz (definidas em `[LIGHTS]`)
+- `B1` a `B9`: billboards (definidos em `[BILLBOARDS]`)
+
+*(O formato legado ainda é aceito: `7` ou mais = luzes definidas em `[LIGHTS]` com o mesmo número.)*
 
 ---
 
@@ -201,10 +237,9 @@ A pasta [`mapas/`](./mapas) já vem com alguns exemplos prontos para testar.
 
 ## 🧭 Roadmap / ideias futuras
 
-- [ ] Suporte a entidades (billboards com IA e movimento)
+- [ ] Billboards com IA e movimento (entidades vivas)
 - [ ] Otimização de UX do editor de .rcfg
 - [ ] Sistema de som posicional
-- [ ] Iluminação avançada
 
 *(sinta-se livre para abrir uma issue sugerindo algo)*
 
