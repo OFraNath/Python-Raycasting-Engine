@@ -1039,7 +1039,16 @@ vec3 skyColor(float row, vec2 rayDir, float pixX) {
     base += celestialContrib(-sunDir, -u_sunElev, u_moonColor, pixX, row);
     if (u_starsCount > 0.5 && u_nightFactor > 0.02) {
         float az = atan(rayDir.y, rayDir.x);
-        float elevProxy = clamp(1.0 - row / max(u_horizon, 1.0), 0.0, 1.0);
+        // Esfera celeste: o grid de estrelas é ancorado no MUNDO (azimute +
+        // elevação verdadeira do raio), não na linha da tela. Antes usava
+        // "1.0 - row/u_horizon", que muda quando o jogador olha pra cima/
+        // baixo (u_horizon varia) — o grid esticava/comprimia e as estrelas
+        // se distorciam. Elevação verdadeira via pinhole invertido (mesma
+        // relação do chão, rowDist = (u_scale*0.5)/(row-horizon)): é um
+        // ângulo de mundo fixo, então o campo de estrelas fica rígido como
+        // uma cúpula e nunca passa de sin(90°) = 1.
+        float tanE = (u_horizon - row) / max(u_scale * 0.5, 1.0);
+        float elevProxy = tanE / sqrt(1.0 + tanE * tanE);
         vec2 starCell = floor(vec2(az * 40.0, elevProxy * u_starsCount));
         float h = starHash(starCell);
         float starMask = step(0.995, h);

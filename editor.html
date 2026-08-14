@@ -134,6 +134,7 @@
       <span class="stat">Paredes: <b id="statWalls">0</b></span>
       <span class="stat">Luzes: <b id="statLights">0</b></span>
       <span class="stat">Billboards: <b id="statBB">0</b></span>
+      <span class="stat">Partículas: <b id="statP">0</b></span>
     </div>
     <div id="canvaswrap"><div id="mapspacer"></div><canvas id="mapcanvas"></canvas></div>
   </div>
@@ -167,6 +168,13 @@ const THEME_KEYS = ["sky_base","sky_top","floor_base","floor_top","crosshair",
   "hud_light","hud_alert","minimap_player"];
 const DEFAULT_WALL_COLORS = ["#7a6a55","#5590c8","#4caf6b","#c85a8a","#9a6ac8","#c8935a",
   "#c8b45a","#5ac8b0","#c85a5a"];
+// Defaults espelham _parse_sky() da engine: sem a seção, enabled=false (sem
+// sol/lua/estrelas). Quando a seção existe, STARS padrão é 140 (comportamento
+// exato do back-end, que usa d.get("stars", 140)).
+const DEFAULT_SKY = {enabled:false, cycle:false, day_length:120, start_time:8,
+  sun_color:"#fff2c0", moon_color:"#b9c6e0", stars:140};
+// Defaults de uma entrada nova de [PARTICLES] (mesmos valores de _parse_particles).
+const DEFAULT_PARTICLE = ["", 8, 0.5, 0.4];
 
 function blankMap(rows, cols){
   const g = [];
@@ -194,6 +202,8 @@ function freshState(){
             hud_alert:"#ffcc00", minimap_player:"#00ffff"},
     title: "🔮 Novo Mapa",
     billboards: {},
+    sky: {...DEFAULT_SKY},
+    particles: {},
     map: blankMap(10,12),
   };
 }
@@ -386,6 +396,28 @@ function loadRcfg(text){
     if(caminho) s.billboards[parseInt(tipo)] = [caminho, offset, escala];
   }
 
+  s.sky = {...DEFAULT_SKY};
+  const skySec = dados.SKY || {};
+  // "enabled" = presença da seção: é assim que a engine decide se desenha
+  // sol/lua/estrelas (sky["enabled"] = bool(dados["SKY"])).
+  s.sky.enabled = Object.keys(skySec).length > 0;
+  s.sky.cycle = ["1","true","yes"].includes(String(skySec.cycle||"").trim().toLowerCase());
+  s.sky.day_length = parseFloat(skySec.day_length ?? DEFAULT_SKY.day_length);
+  s.sky.start_time = parseFloat(skySec.start_time ?? DEFAULT_SKY.start_time) % 24;
+  s.sky.sun_color = normColor(skySec.sun_color || DEFAULT_SKY.sun_color);
+  s.sky.moon_color = normColor(skySec.moon_color || DEFAULT_SKY.moon_color);
+  s.sky.stars = parseInt(skySec.stars ?? DEFAULT_SKY.stars);
+
+  s.particles = {};
+  for(const [tipo,valor] of Object.entries(dados.PARTICLES||{})){
+    const partes = valor.split(/[\s,]+/).filter(Boolean);
+    const caminho = partes[0]||"";
+    const quantidade = partes[1] ? parseInt(partes[1]) : DEFAULT_PARTICLE[1];
+    const velocidade = partes[2] ? parseFloat(partes[2]) : DEFAULT_PARTICLE[2];
+    const espalhamento = partes[3] ? parseFloat(partes[3]) : DEFAULT_PARTICLE[3];
+    if(caminho) s.particles[parseInt(tipo)] = [caminho, quantidade, velocidade, espalhamento];
+  }
+
   return s;
 }
 
@@ -459,6 +491,16 @@ function serializeRcfg(s){
     for(const k of themeKeys) L.push(`${k.toUpperCase()} ${s.theme[k]}`);
     L.push("");
   }
+  if(s.sky && s.sky.enabled){
+    L.push("[SKY]");
+    L.push(`CYCLE ${s.sky.cycle ? "true" : "false"}`);
+    L.push(`DAY_LENGTH ${s.sky.day_length}`);
+    L.push(`START_TIME ${s.sky.start_time}`);
+    L.push(`SUN_COLOR ${s.sky.sun_color}`);
+    L.push(`MOON_COLOR ${s.sky.moon_color}`);
+    L.push(`STARS ${s.sky.stars}`);
+    L.push("");
+  }
   if(s.title && s.title.trim()){
     L.push("[TITLE]");
     L.push(s.title.trim());
@@ -470,6 +512,15 @@ function serializeRcfg(s){
     for(const n of bbKeys){
       const [path, off, scale] = s.billboards[n];
       if(path) L.push(`${n} ${path} ${off} ${scale ?? 1.0}`);
+    }
+    L.push("");
+  }
+  const particleKeys = Object.keys(s.particles||{}).map(Number).sort((a,b)=>a-b);
+  if(particleKeys.length){
+    L.push("[PARTICLES]");
+    for(const n of particleKeys){
+      const [path, qty, vel, spread] = s.particles[n];
+      if(path) L.push(`${n} ${path} ${qty} ${vel} ${spread}`);
     }
     L.push("");
   }
@@ -519,7 +570,8 @@ function paletteHTML(){
 
   h("Partículas P1–P9");
   for(let n=1;n<=9;n++){
-    mk("particle",n,`P${n}`,"#7fd8b0");
+    const has = !!(state.particles[n] && state.particles[n][0]);
+    mk("particle",n,`P${n}${has?"":" (sem img)"}`, has ? "#7fd8b0" : "#2a2521");
   }
 
   const hint = document.createElement("div"); hint.className="hint";
@@ -735,19 +787,24 @@ function bumpStat(tok, delta){
   if(extras.B!=null){
     document.getElementById("statBB").textContent = (parseInt(document.getElementById("statBB").textContent)||0)+delta;
   }
+  if(extras.P!=null){
+    document.getElementById("statP").textContent = (parseInt(document.getElementById("statP").textContent)||0)+delta;
+  }
 }
 
 function computeStats(){
-  let w=0,l=0,b=0;
+  let w=0,l=0,b=0,p=0;
   for(const row of state.map) for(const tok of row){
     const {base, extras} = parseToken(tok);
     if(/^\d+$/.test(base) && base!=="0") w++;
     if(extras.L!=null) l++;
     if(extras.B!=null) b++;
+    if(extras.P!=null) p++;
   }
   document.getElementById("statWalls").textContent = w;
   document.getElementById("statLights").textContent = l;
   document.getElementById("statBB").textContent = b;
+  document.getElementById("statP").textContent = p;
 }
 
 /* ─── undo/redo por stroke (agrupa todas as células alteradas entre
@@ -968,8 +1025,10 @@ const TABS = [
   {id:"textures", label:"Texturas"},
   {id:"lights", label:"Luzes"},
   {id:"theme", label:"Tema"},
+  {id:"sky", label:"Céu"},
   {id:"title", label:"Título"},
   {id:"billboards", label:"Billboards"},
+  {id:"particles", label:"Partículas"},
 ];
 let activeTab = "config";
 
@@ -1008,6 +1067,17 @@ function colorField(label, value, onChange){
   cp.oninput = ()=>{ inp.value=cp.value; onChange(cp.value); };
   row.appendChild(inp); row.appendChild(cp);
   wrap.appendChild(lab); wrap.appendChild(row);
+  return wrap;
+}
+
+function checkField(label, value, onChange){
+  const wrap = document.createElement("div"); wrap.className="field";
+  const row = document.createElement("div"); row.style.display="flex"; row.style.alignItems="center"; row.style.gap="6px";
+  const inp = document.createElement("input"); inp.type="checkbox"; inp.checked=!!value;
+  inp.onchange = ()=> onChange(inp.checked);
+  const lab = document.createElement("label"); lab.textContent = label; lab.style.margin="0"; lab.style.cursor="pointer";
+  row.appendChild(inp); row.appendChild(lab);
+  wrap.appendChild(row);
   return wrap;
 }
 
@@ -1190,6 +1260,26 @@ function panelTheme(root){
   root.appendChild(fs);
 }
 
+function panelSky(root){
+  const fs = document.createElement("fieldset");
+  fs.innerHTML = `<legend>Céu &amp; ciclo dia/noite</legend>`;
+  fs.appendChild(checkField("Céu ativo (sol/lua/estrelas)", state.sky.enabled, v=>{state.sky.enabled=v;}));
+  fs.appendChild(checkField("Ciclo automático dia/noite", state.sky.cycle, v=>{state.sky.cycle=v;}));
+  const r = document.createElement("div"); r.className="row2";
+  r.appendChild(field("Duração do dia (s)", state.sky.day_length, v=>state.sky.day_length=v, {type:"number", step:"5"}));
+  r.appendChild(field("Hora inicial (0–24)", state.sky.start_time, v=>state.sky.start_time=v, {type:"number", step:"0.5"}));
+  fs.appendChild(r);
+  const r2 = document.createElement("div"); r2.className="row2";
+  r2.appendChild(colorField("Cor do sol", state.sky.sun_color, v=>state.sky.sun_color=v));
+  r2.appendChild(colorField("Cor da lua", state.sky.moon_color, v=>state.sky.moon_color=v));
+  fs.appendChild(r2);
+  fs.appendChild(field("Estrelas (0 = nenhuma)", state.sky.stars, v=>state.sky.stars=v, {type:"number"}));
+  root.appendChild(fs);
+  const hint = document.createElement("div"); hint.className="hint";
+  hint.textContent = "No jogo: P pausa o ciclo · , e . ajustam a hora em ±0,5h. Estrelas só aparecem à noite.";
+  root.appendChild(hint);
+}
+
 function panelTitle(root){
   const fs = document.createElement("fieldset");
   fs.innerHTML = `<legend>Título exibido na janela</legend>`;
@@ -1227,14 +1317,47 @@ function panelBillboards(root){
   }
 }
 
+function panelParticles(root){
+  const hint = document.createElement("div"); hint.className="hint";
+  hint.textContent = "Caminho da imagem + quantidade de instâncias, velocidade de flutuar e raio de espalhamento (mesmos campos do [PARTICLES] da engine).";
+  root.appendChild(hint);
+
+  for(let n=1;n<=9;n++){
+    const has = !!state.particles[n];
+    const e = document.createElement("div"); e.className="entry";
+    const head = document.createElement("div"); head.className="entry-head";
+    head.innerHTML = `<span>Partícula P${n}</span>`;
+    if(has){
+      const rm = document.createElement("button"); rm.className="rm"; rm.textContent="✕";
+      rm.onclick = ()=>{ delete state.particles[n]; renderPanels(); paletteHTML(); drawMap(); };
+      head.appendChild(rm);
+    }
+    e.appendChild(head);
+    if(has){
+      e.appendChild(field("Caminho no projeto (ex: sprites/brilho.png)", state.particles[n][0],
+        v=>{ state.particles[n][0]=v; paletteHTML(); }));
+      const r = document.createElement("div"); r.className="row3";
+      r.appendChild(field("Quantidade", state.particles[n][1], v=>state.particles[n][1]=v, {type:"number"}));
+      r.appendChild(field("Velocidade", state.particles[n][2], v=>state.particles[n][2]=v, {type:"number", step:"0.1"}));
+      r.appendChild(field("Espalhamento", state.particles[n][3], v=>state.particles[n][3]=v, {type:"number", step:"0.1"}));
+      e.appendChild(r);
+    } else {
+      const add = document.createElement("button"); add.className="addbtn"; add.textContent="+ definir partícula";
+      add.onclick = ()=>{ state.particles[n]=[...DEFAULT_PARTICLE]; renderPanels(); paletteHTML(); };
+      e.appendChild(add);
+    }
+    root.appendChild(e);
+  }
+}
+
 function renderPanels(){
   buildTabs();
   const root = document.getElementById("panels");
   root.innerHTML = "";
   const fns = {
     config:panelConfig, spawn:panelSpawn, info:panelInfo, colors:panelColors,
-    textures:panelTextures, lights:panelLights, theme:panelTheme, title:panelTitle,
-    billboards:panelBillboards
+    textures:panelTextures, lights:panelLights, theme:panelTheme, sky:panelSky,
+    title:panelTitle, billboards:panelBillboards, particles:panelParticles
   };
   fns[activeTab](root);
 }
