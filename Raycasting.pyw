@@ -100,11 +100,14 @@ def _parse_sections(caminho):
             continue
 
         if section == "MAP":
-            celulas = re.split(r"[\s,;]+", stripped)
-            try:
-                dados["MAP"].append([int(c) for c in celulas if c])
-            except ValueError:
-                raise ValueError(f"valor inválido na linha do mapa: {linha!r}")
+            # Guarda os TOKENS crus (strings) em vez de já converter pra int
+            # aqui — os tokens podem ser números (parede/vazio) ou, no novo
+            # formato (Fase 4), letras: "L1".."L9" para luzes e "B1".."B9"
+            # para billboards. A tradução pra inteiro (o que a engine usa
+            # internamente) acontece em _process_map_tokens(), depois que
+            # já lemos o mapa inteiro e sabemos se é formato legado ou novo.
+            celulas = [c for c in re.split(r"[\s,;]+", stripped) if c]
+            dados["MAP"].append(celulas)
         elif section == "TITLE":
             dados["TITLE"]["value"] = stripped
         else:
@@ -151,7 +154,7 @@ def _parse_config(d):
     return cfg
 
 
-def _parse_spawn(d, mapa):
+def _parse_spawn(d, mapa, orb_min):
     w = len(mapa[0])
     h = len(mapa)
     x = _to_float(d.get("x", 1.5), "SPAWN X")
@@ -160,12 +163,12 @@ def _parse_spawn(d, mapa):
 
     def livre(fx, fy):
         ix, iy = int(fx), int(fy)
-        return 0 <= ix < w and 0 <= iy < h and (mapa[iy][ix] == 0 or mapa[iy][ix] >= ORB_MIN)
+        return 0 <= ix < w and 0 <= iy < h and (mapa[iy][ix] == 0 or mapa[iy][ix] >= orb_min)
 
     if not livre(x, y):
         for j in range(h):
             for i in range(w):
-                if mapa[j][i] == 0 or mapa[j][i] >= ORB_MIN:
+                if mapa[j][i] == 0 or mapa[j][i] >= orb_min:
                     x, y = i + 0.5, j + 0.5
                     break
             else:
@@ -235,19 +238,106 @@ def _parse_lights(d):
     return lights
 
 
+# Formato LEGADO (compatível com mapas antigos): dígitos 0-9 direto.
+#   0 = vazio, 1-6 = parede, 7+ = luz (ORB_MIN_LEGADO)
+WALL_MAX_LEGADO = 6
+ORB_MIN_LEGADO = 7
+
+# Formato NOVO (Fase 4): luz vira letra "L" em vez de dígito, o que libera
+# os dígitos 7, 8 e 9 pra serem usados como paredes/texturas extras.
+#   0 = vazio, 1-9 = parede, "L1".."L9" = luz, "B1".."B9" = billboard
+WALL_MAX_NOVO = 9
+ORB_MIN_NOVO = 100  # offset interno alto, só pra não colidir com paredes 1-9
+
+
+def _process_map_tokens(raw_rows):
+    # Detecta automaticamente se o mapa usa o formato novo (com L/B) ou o
+    # legado (só dígitos) — assim mapas antigos continuam funcionando
+    # exatamente como antes, sem precisar de nenhuma migração manual.
+    is_new_format = any(
+        len(tok) >= 2 and tok[0].upper() in ("L", "B") and tok[1:].isdigit()
+        for row in raw_rows for tok in row
+    )
+    wall_max = WALL_MAX_NOVO if is_new_format else WALL_MAX_LEGADO
+    orb_min = ORB_MIN_NOVO if is_new_format else ORB_MIN_LEGADO
+
+    grid = []
+    billboards = []  # lista de (x_central, y_central, tipo)
+    for j, row in enumerate(raw_rows):
+        int_row = []
+        for i, tok in enumerate(row):
+            up = tok.upper()
+            if len(up) >= 2 and up[0] == "L" and up[1:].isdigit():
+                n = int(up[1:])
+                if not (1 <= n <= 9):
+                    raise ValueError(f"luz {tok!r}: índice deve ser 1-9")
+                int_row.append(orb_min + (n - 1))
+            elif len(up) >= 2 and up[0] == "B" and up[1:].isdigit():
+                n = int(up[1:])
+                if not (1 <= n <= 9):
+                    raise ValueError(f"billboard {tok!r}: índice deve ser 1-9")
+                billboards.append((i + 0.5, j + 0.5, n))
+                int_row.append(0)  # célula em si é chão livre, andável
+            else:
+                try:
+                    int_row.append(int(tok))
+                except ValueError:
+                    raise ValueError(f"valor inválido no mapa: {tok!r}")
+        grid.append(int_row)
+    return grid, billboards, wall_max, orb_min, is_new_format
+
+
+def _parse_billboards(d, pasta_base):
+    # Seção [BILLBOARDS]: "ID caminho/imagem.png offset_y"
+    # offset_y é a distância vertical (unidades de mundo) entre o chão e a
+    # base do sprite — 0.0 encosta no chão, valores positivos deixam o
+    # sprite "flutuando" a uma altura fixa (ex: pés de um personagem que
+    # deve tocar o chão visualmente, mas a imagem tem uma margem embaixo).
+    billboards = {}
+    for tipo, valor in d.items():
+        try:
+            tipo_int = int(tipo)
+        except ValueError:
+            raise ValueError(f"tipo de billboard inválido: {tipo!r}")
+        partes = re.split(r"[\s,]+", valor)
+        caminho_rel = partes[0].strip() if partes and partes[0] else ""
+        if not caminho_rel:
+            continue
+        offset_y = float(partes[1]) if len(partes) >= 2 and partes[1] else 0.0
+        billboards[tipo_int] = (os.path.join(pasta_base, caminho_rel), offset_y)
+    return billboards
+
+
 def load_rcfg(caminho):
     dados = _parse_sections(caminho)
     if "MAP" not in dados or not dados["MAP"]:
         raise ValueError("nenhum mapa encontrado (seção [MAP])")
-    mapa = dados["MAP"]
-    largura = len(mapa[0])
-    for i, row in enumerate(mapa):
+    raw_mapa = dados["MAP"]
+    largura = len(raw_mapa[0])
+    for i, row in enumerate(raw_mapa):
         if len(row) != largura:
             raise ValueError(f"linha {i + 1} tem {len(row)} colunas, o mapa precisa de {largura}")
-    spawn = _parse_spawn(dados.get("SPAWN", {}), mapa)
+
+    mapa, billboard_cells, wall_max, orb_min, is_new_format = _process_map_tokens(raw_mapa)
+    spawn = _parse_spawn(dados.get("SPAWN", {}), mapa, orb_min)
     pasta_base = os.path.dirname(os.path.abspath(caminho))
     texturas_rel = _parse_textures(dados.get("TEXTURES", {}))
     texturas_abs = {t: os.path.join(pasta_base, rel) for t, rel in texturas_rel.items()}
+
+    lights = _parse_lights(dados.get("LIGHTS", {}))
+    if is_new_format:
+        # No formato novo, a seção [LIGHTS] é escrita com índices 1-9
+        # (correspondendo a L1..L9), então traduzimos pras mesmas chaves
+        # internas (orb_min + n-1) usadas na grade do mapa.
+        lights = {orb_min + (n - 1): v for n, v in lights.items() if 1 <= n <= 9}
+
+    billboard_defs = _parse_billboards(dados.get("BILLBOARDS", {}), pasta_base)
+    billboard_instances = [
+        (x, y, billboard_defs[tipo][0], billboard_defs[tipo][1])
+        for (x, y, tipo) in billboard_cells
+        if tipo in billboard_defs
+    ]
+
     return {
         "config": _parse_config(dados.get("CONFIG", {})),
         "spawn": spawn,
@@ -256,8 +346,11 @@ def load_rcfg(caminho):
         "theme": _parse_theme(dados.get("THEME", {})),
         "title": dados.get("TITLE", {}).get("value", ""),
         "map": mapa,
-        "lights": _parse_lights(dados.get("LIGHTS", {})),
+        "lights": lights,
         "textures": texturas_abs,
+        "wall_max": wall_max,
+        "orb_min": orb_min,
+        "billboards": billboard_instances,
     }
 
 
@@ -323,6 +416,19 @@ LIGHT_W = MAP_W
 LIGHT_H = MAP_H
 px, py, pangle, look_y = 1.5, 1.5, 0.0, 0.0
 SPAWN = (1.5, 1.5, 0.0)
+
+# ── Billboards (Fase 5): lista de (x, y, caminho_abs_textura, offset_y) ──
+BILLBOARDS = []
+MAX_BILLBOARD_INSTANCES = 32   # limite de sprites simultâneos no mapa
+BILLBOARD_LAYERS = 9           # nº de "slots" de textura únicos suportados
+_BB_LAYER_BY_PATH = {}         # caminho_abs -> índice de camada no array da GPU
+tex_bbTex = None
+
+# ── Tela de carregamento (Fase 2) ──
+# Mapas com essa quantidade de células (largura*altura) ou mais mostram uma
+# barra de progresso durante o cálculo de iluminação, em vez de travar a
+# janela sem feedback nenhum.
+LOADING_SCREEN_THRESHOLD_CELLS = 4096  # ex: um mapa 64x64 ou maior
 
 # Cache em memória (não vai pro disco): caminho absoluto do .rcfg -> última
 # posição/direção da câmera nele. Vive só enquanto o processo está rodando,
@@ -420,7 +526,7 @@ def _los_blocked_f(x0, y0, x1, y1):
     return False
 
 
-def compute_light_grid():
+def compute_light_grid(on_progress=None):
     # Cada subcelula guarda luz em RGB (não só intensidade), o que permite
     # tochas coloridas e luz "quicando" nas paredes (bounce/GI simples).
     #
@@ -506,6 +612,10 @@ def compute_light_grid():
                         cell[2] += cor_rgb[2] * falloff
 
     # luz direta das tochas/orbes
+    # Pesos de progresso: a passada direta costuma dominar o custo total
+    # (cresce com nº de luzes x raio^2), então ela recebe 70% da barra; os
+    # 30% restantes ficam pros passes de bounce/GI abaixo. Não é uma medida
+    # exata de tempo, mas dá um feedback razoável e monotônico pro usuário.
     for y in range(MAP_H):
         for x in range(MAP_W):
             t = MAP[y][x]
@@ -514,6 +624,8 @@ def compute_light_grid():
             cor_hex, raio = LIGHT_ORBS.get(t, ("#ffcc88", 4.0))
             cor_rgb = tuple((c / 255.0) * 4.0 for c in _rgb(cor_hex))
             add_light(x, y, raio, cor_rgb)
+        if on_progress is not None:
+            on_progress(0.7 * (y + 1) / MAP_H)
 
     # bounce: paredes iluminadas reemitem uma fração da própria cor pras
     # celulas vizinhas — luz vermelha perto de parede azul tinge o entorno.
@@ -544,6 +656,13 @@ def compute_light_grid():
                         continue  # parede às escuras não quica nada relevante
                     bounce_rgb = tuple(wall_rgb[k] * recv_intensity * decaimento for k in range(3))
                     add_light(x, y, LIGHT_BOUNCE_RADIUS, bounce_rgb)
+                if on_progress is not None:
+                    passes = max(1, LIGHT_BOUNCE_PASSES)
+                    frac = (passe + (y + 1) / MAP_H) / passes
+                    on_progress(0.7 + 0.3 * frac)
+
+    if on_progress is not None:
+        on_progress(1.0)
 
     for row in grid:
         for cell in row:
@@ -581,7 +700,6 @@ void main() {
 
 FRAG = """
 #version 330 core
-#define ORB_MIN 7
 in vec2 uv;
 out vec4 outColor;
 
@@ -595,12 +713,26 @@ uniform float u_ambient;
 uniform float u_fog;
 uniform float u_depth;
 
+// Fase 4: em vez de constantes fixas (#define ORB_MIN 7, "t<=6"), agora
+// são uniforms — o intervalo de ids de parede e o id mínimo de luz mudam
+// conforme o mapa é legado (paredes 1-6, luz é dígito >=7) ou novo
+// (paredes 1-9, luz é a letra "L1".."L9", offset interno alto).
+uniform float u_wallMax;
+uniform float u_orbMin;
+
 uniform sampler2D u_map;    // tipo de celula (R32F)
 uniform sampler2D u_light;  // grade de luz (R32F)
 uniform sampler2D u_palA;   // cor A por tipo (RGBA32F)
 uniform sampler2D u_palB;   // cor B por tipo
 uniform sampler2DArray u_wallTex;  // texturas por tipo (Fase 2), 1 camada por tipo
 uniform sampler2D u_hasTex;        // 1.0 = tipo tem textura própria, 0.0 = usa cor sólida
+
+// Fase 5: billboards (sprites sempre de frente pra câmera)
+uniform int u_bbCount;
+uniform vec2 u_bbPos[32];
+uniform float u_bbLayer[32];
+uniform float u_bbYOff[32];
+uniform sampler2DArray u_bbTex;
 
 uniform vec3 u_skyB, u_skyT, u_floorB, u_floorT;
 uniform vec3 u_cross;
@@ -672,7 +804,7 @@ void main() {
         else                          { sideDist.y += delta.y; mapPos.y += float(step.y); side = 1; }
         if (mapPos.x < 0.0 || mapPos.x >= u_mapSize.x || mapPos.y < 0.0 || mapPos.y >= u_mapSize.y) break;
         int t = cellType(mapPos);
-        if (t >= 1 && t <= 6) { hit = true; wtype = t; }
+        if (t >= 1 && t <= int(u_wallMax)) { hit = true; wtype = t; }
         it++;
     }
 
@@ -756,8 +888,54 @@ void main() {
         }
     }
 
-    // crosshair (braços curtos, com vão no centro)
     vec2 pix = vec2(uv.x, 1.0 - uv.y) * u_res;
+
+    // ── billboards (Fase 5): sprites que sempre encaram a câmera ──
+    // Técnica clássica de sprite-casting: transforma a posição do
+    // billboard pro espaço da câmera usando a inversa da matriz
+    // [plane, dir] (mesma convenção 2D usada nos raycasters tipo
+    // Wolfenstein/Lodev). "ty" é a profundidade ao longo do raio da
+    // câmera — já corrigida contra o efeito "olho de peixe", assim como
+    // perpDist é pras paredes — e "tx" é o deslocamento lateral.
+    {
+        float wallDepth = hit ? ((side == 0) ? (sideDist.x - delta.x) : (sideDist.y - delta.y)) : 1e9;
+        float invDet = 1.0 / (u_plane.x * u_dir.y - u_dir.x * u_plane.y);
+        float bestDepth = 1e9;
+        vec4 bestSample = vec4(0.0);
+        for (int b = 0; b < u_bbCount && b < 32; b++) {
+            vec2 sp = u_bbPos[b] - u_pos;
+            float tx = invDet * (u_dir.y * sp.x - u_dir.x * sp.y);
+            float ty = invDet * (-u_plane.y * sp.x + u_plane.x * sp.y);
+            if (ty <= 0.05 || ty >= wallDepth || ty >= bestDepth) continue;
+
+            float screenX = (u_res.x * 0.5) * (1.0 + tx / ty);
+            float size = u_res.y / ty;   // sprite de 1 unidade de mundo, mesma escala das paredes (lineH)
+            float left = screenX - size * 0.5;
+            if (pix.x < left || pix.x > left + size) continue;
+
+            float shift = u_bbYOff[b] * (u_res.y / ty);  // eleva o sprite do chão (offset_y do .rcfg)
+            float bottom = horizon + size * 0.5 - shift;
+            float top = bottom - size;
+            if (row < top || row > bottom) continue;
+
+            vec2 uvBB = vec2((pix.x - left) / size, (row - top) / size);
+            vec4 s = texture(u_bbTex, vec3(uvBB, u_bbLayer[b]));
+            if (s.a < 0.05) continue;
+
+            bestDepth = ty;
+            bestSample = s;
+        }
+        if (bestSample.a > 0.0) {
+            vec2 bWorld = clamp(u_pos + bestDepth * rayDir, vec2(0.02), u_mapSize - vec2(0.02));
+            vec3 lv = lightAt(bWorld);
+            vec3 dyn = lv / (lv + vec3(1.0));
+            vec3 lit = bestSample.rgb * dyn * 2.0;
+            float fogv2 = clamp((u_fog * bestDepth) / u_depth, 0.0, 1.0);
+            color = mix(color, lit * (1.0 - fogv2), bestSample.a);
+        }
+    }
+
+    // crosshair (braços curtos, com vão no centro)
     vec2 ctr = u_res * 0.5;
     float ax = abs(pix.x - ctr.x);
     float ay = abs(pix.y - ctr.y);
@@ -773,9 +951,9 @@ void main() {
         vec2 cell = floor(mmPix / u_mmCell);
         if (cell.x >= 0.0 && cell.x < u_mapSize.x && cell.y >= 0.0 && cell.y < u_mapSize.y) {
             int t = cellType(cell);
-            if (t >= 1 && t <= 6) {
+            if (t >= 1 && t <= int(u_wallMax)) {
                 color = palColor(float(t), 1);
-            } else if (t >= ORB_MIN) {
+            } else if (t >= int(u_orbMin)) {
                 color = palColor(float(t), 1) * 1.4;
             } else {
                 color = vec3(0.06);
@@ -794,13 +972,64 @@ void main() {
 """
 
 
+# ══ TELA DE CARREGAMENTO (Fase 2) ════════════════════════════════
+def _make_progress_drawer(width, height, label):
+    # Cria uma janela simples (superfície 2D comum, sem moderngl/OpenGL —
+    # não precisa, e assim não compete com a inicialização "pesada" do
+    # contexto GL) e devolve uma função draw(pct) que redesenha uma barra
+    # de progresso. Usada como callback dentro de compute_light_grid().
+    pygame.init()
+    pygame.font.init()
+    screen = pygame.display.set_mode((max(320, width), max(120, height)))
+    pygame.display.set_caption("Carregando mapa...")
+    font = pygame.font.SysFont(None, 26)
+
+    def draw(pct):
+        pct = max(0.0, min(1.0, pct))
+        w, h = screen.get_size()
+        screen.fill((12, 12, 18))
+        bar_w, bar_h = int(w * 0.6), 22
+        bx, by = (w - bar_w) // 2, h // 2
+        pygame.draw.rect(screen, (55, 55, 68), (bx, by, bar_w, bar_h), border_radius=6)
+        pygame.draw.rect(screen, (90, 200, 160), (bx, by, int(bar_w * pct), bar_h), border_radius=6)
+        pygame.draw.rect(screen, (120, 120, 140), (bx, by, bar_w, bar_h), width=1, border_radius=6)
+        txt = font.render(f"{label} — {int(pct * 100)}%", True, (230, 230, 230))
+        screen.blit(txt, (bx, by - 32))
+        # processa a fila de eventos pra o SO não achar que o app travou
+        # (mensagem "não está respondendo") durante o cálculo pesado.
+        pygame.event.pump()
+        pygame.display.flip()
+
+    draw(0.0)
+    return draw
+
+
 # ══ INICIALIZAÇÃO pygame + moderngl ═════════════════════════════
+def resize_window(width, height):
+    # Cria/recria a janela pygame no tamanho pedido E sincroniza o viewport
+    # do OpenGL/moderngl com esse mesmo tamanho.
+    #
+    # Bug corrigido aqui (Fase 1): antes, ao trocar de mapa pra um .rcfg com
+    # resolução diferente da janela original, o código só chamava
+    # pygame.display.set_mode(...) de novo — a janela do SO mudava de
+    # tamanho, mas o moderngl continuava desenhando no viewport antigo
+    # (o tamanho que existia quando o contexto foi criado, em init_display).
+    # O resultado eram bordas pretas: a GPU só pintava um retângulo do
+    # tamanho antigo dentro da janela nova, maior.
+    pygame.display.set_mode((width, height), pygame.OPENGL | pygame.DOUBLEBUF)
+    if ctx is not None:
+        ctx.viewport = (0, 0, width, height)
+
+
 def init_display():
     global ctx, prog, vao, tex_map, tex_light, tex_palA, tex_palB, tex_wallArr, tex_hasTex
+    global tex_bbTex
+    ctx = None
     pygame.init()
-    pygame.display.set_mode((WIDTH, HEIGHT), pygame.OPENGL | pygame.DOUBLEBUF)
+    resize_window(WIDTH, HEIGHT)
     pygame.display.set_caption("Raycasting FPS GPU")
     ctx = moderngl.create_context()
+    ctx.viewport = (0, 0, WIDTH, HEIGHT)
     ctx.enable(moderngl.BLEND)
 
     prog = ctx.program(vertex_shader=VERT, fragment_shader=FRAG)
@@ -817,14 +1046,19 @@ def init_display():
     vao = ctx.vertex_array(prog, vbo, "in_pos", "in_uv")
 
     tex_map = tex_light = tex_palA = tex_palB = tex_wallArr = tex_hasTex = None
+    tex_bbTex = None
     upload_textures()
 
 
-TEXTURE_LAYERS = WALL_MAX  # 1 camada do array por tipo de parede (1..6)
+# Fixo em WALL_MAX_NOVO (9): o array de texturas sempre reserva o máximo
+# de camadas possível, já que o formato de mapa (legado x novo, Fase 4)
+# pode mudar de mapa pra mapa, mas o array da GPU precisa de um tamanho
+# fixo definido na inicialização.
+TEXTURE_LAYERS = WALL_MAX_NOVO  # 1 camada do array por tipo de parede (1..9)
 
 
 def upload_textures():
-    global tex_map, tex_light, tex_palA, tex_palB, tex_wallArr, tex_hasTex
+    global tex_map, tex_light, tex_palA, tex_palB, tex_wallArr, tex_hasTex, tex_bbTex
     if tex_map is not None:
         tex_map.release()
     if tex_light is not None:
@@ -835,6 +1069,8 @@ def upload_textures():
         tex_palB.release()
     if tex_wallArr is not None:
         tex_wallArr.release()
+    if tex_bbTex is not None:
+        tex_bbTex.release()
     if tex_hasTex is not None:
         tex_hasTex.release()
 
@@ -889,12 +1125,34 @@ def upload_textures():
     tex_hasTex = ctx.texture((256, 1), 1, has_tex.tobytes(), dtype="f4")
     tex_hasTex.filter = (moderngl.NEAREST, moderngl.NEAREST)
 
+    # ── texture array dos billboards (Fase 5) ──
+    # Cada instância de billboard no [MAP] (B1, B2, ...) referencia uma
+    # camada desse array pelo índice que já vem calculado em BILLBOARDS
+    # (ver upload de uniforms no loop principal). Sprites sem imagem
+    # (caminho inválido) caem no fallback xadrez magenta, igual às paredes.
+    bb_camadas = np.zeros((BILLBOARD_LAYERS, tam[1], tam[0], 4), dtype=np.uint8)
+    caminhos_billboards = sorted({caminho for (_, _, caminho, _) in BILLBOARDS})[:BILLBOARD_LAYERS]
+    for idx, caminho_abs in enumerate(caminhos_billboards):
+        surf = load_asset_image(caminho_abs, tam)
+        pixels = pygame.image.tostring(surf, "RGBA")
+        bb_camadas[idx] = np.frombuffer(pixels, dtype=np.uint8).reshape(tam[1], tam[0], 4)
+    tex_bbTex = ctx.texture_array((tam[0], tam[1], BILLBOARD_LAYERS), 4, bb_camadas.tobytes())
+    tex_bbTex.filter = (moderngl.LINEAR, moderngl.LINEAR)
+    tex_bbTex.repeat_x = False
+    tex_bbTex.repeat_y = False
+    tex_bbTex.build_mipmaps()
+    # guarda o mapeamento caminho -> índice de camada pra montar os
+    # uniforms de instância (posição/camada/offset) no loop principal.
+    global _BB_LAYER_BY_PATH
+    _BB_LAYER_BY_PATH = {c: i for i, c in enumerate(caminhos_billboards)}
+
 
 def load_map_file(caminho):
     global MAP, MAP_W, MAP_H, WALL_COLORS, WALL_TEXTURES, TEXTURE_SIZE, THEME, LIGHT_ORBS, AMBIENT, FOG, LIGHT_RES
     global LIGHT_SOFT_SAMPLES, LIGHT_SOFT_RADIUS, LIGHT_BOUNCE, LIGHT_BOUNCE_RADIUS, LIGHT_BOUNCE_PASSES
     global WIDTH, HEIGHT, FOV, MAX_DEPTH, MOVE_SPEED, RUN_MULTIPLIER, MOUSE_SENS_X
     global MOUSE_SENS_Y, MAX_LOOK_Y, MM, SPAWN, px, py, pangle, look_y
+    global WALL_MAX, ORB_MIN, BILLBOARDS
     data = load_rcfg(caminho)
     cfg = data["config"]
     WIDTH, HEIGHT = cfg["window_width"], cfg["window_height"]
@@ -928,9 +1186,16 @@ def load_map_file(caminho):
     SPAWN = data["spawn"]
     px, py, pangle = SPAWN
     look_y = 0
+    WALL_MAX = data["wall_max"]
+    ORB_MIN = data["orb_min"]
+    BILLBOARDS = data["billboards"]
 
-    compute_light_grid()
-    pygame.display.set_mode((WIDTH, HEIGHT), pygame.OPENGL | pygame.DOUBLEBUF)
+    big_map = (MAP_W * MAP_H) >= LOADING_SCREEN_THRESHOLD_CELLS
+    progress_cb = None
+    if big_map:
+        progress_cb = _make_progress_drawer(WIDTH, HEIGHT, f"Carregando {os.path.basename(caminho)}")
+    compute_light_grid(on_progress=progress_cb)
+    resize_window(WIDTH, HEIGHT)
     upload_textures()
     print(f"Mapa: {data['info'].get('name', caminho)}", flush=True)
 
@@ -1022,7 +1287,13 @@ def main():
             look_y = 0
 
         # ── uniforms ──
-        plane_len = math.tan(FOV / 2)
+        # plane_len é multiplicado pelo aspect ratio (largura/altura) da
+        # janela (Fase 1: bug relacionado ao das bordas pretas). Sem isso,
+        # o FOV horizontal configurado no .rcfg só ficava correto numa
+        # proporção de tela específica; em janelas bem largas ou bem
+        # estreitas a imagem saía "esticada"/com FOV horizontal errado.
+        aspect = (WIDTH / HEIGHT) if HEIGHT else 1.0
+        plane_len = math.tan(FOV / 2) * aspect
         plane_x = -math.sin(pangle) * plane_len
         plane_y = math.cos(pangle) * plane_len
         prog["u_res"].value = (WIDTH, HEIGHT)
@@ -1034,6 +1305,8 @@ def main():
         prog["u_ambient"].value = AMBIENT
         prog["u_fog"].value = FOG
         prog["u_depth"].value = float(MAX_DEPTH)
+        prog["u_wallMax"].value = float(WALL_MAX)
+        prog["u_orbMin"].value = float(ORB_MIN)
 
         sb = [_rgb(THEME["sky_base"])[i] / 255.0 for i in range(3)]
         st = [_rgb(THEME["sky_top"])[i] / 255.0 for i in range(3)]
@@ -1053,6 +1326,20 @@ def main():
         mm_h = MAP_H * mm_cell
         mm_x = WIDTH - mm_w - 10
         mm_y = 10
+        # ── billboards (Fase 5): arrays de instância pro shader ──
+        bb_instances = BILLBOARDS[:MAX_BILLBOARD_INSTANCES]
+        bb_pos = [(0.0, 0.0)] * MAX_BILLBOARD_INSTANCES
+        bb_layer = [0.0] * MAX_BILLBOARD_INSTANCES
+        bb_yoff = [0.0] * MAX_BILLBOARD_INSTANCES
+        for idx, (bx, by, caminho_abs, yoff) in enumerate(bb_instances):
+            bb_pos[idx] = (bx, by)
+            bb_layer[idx] = float(_BB_LAYER_BY_PATH.get(caminho_abs, 0))
+            bb_yoff[idx] = yoff
+        prog["u_bbCount"].value = len(bb_instances)
+        prog["u_bbPos"].value = bb_pos
+        prog["u_bbLayer"].value = bb_layer
+        prog["u_bbYOff"].value = bb_yoff
+
         prog["u_mmPos"].value = (mm_x, mm_y)
         prog["u_mmSize"].value = (mm_w, mm_h)
         prog["u_mmCell"].value = float(mm_cell)
@@ -1067,12 +1354,14 @@ def main():
         tex_palB.use(3)
         tex_wallArr.use(4)
         tex_hasTex.use(5)
+        tex_bbTex.use(6)
         prog["u_map"].value = 0
         prog["u_light"].value = 1
         prog["u_palA"].value = 2
         prog["u_palB"].value = 3
         prog["u_wallTex"].value = 4
         prog["u_hasTex"].value = 5
+        prog["u_bbTex"].value = 6
 
         vao.render(mode=moderngl.TRIANGLES)
         pygame.display.flip()

@@ -1,0 +1,71 @@
+# ============================================================
+#  RAYCASTING FPS — Demo de Billboards (Fase 5)
+#  Sala pequena pra demonstrar sprites sempre-de-frente-pra-câmera:
+#  B1 = vaso de planta encostado no chão (offset 0.0)
+#  B2 = orbe flutuante (offset > 0, "pés" a uma altura fixa do chão)
+#  B2 também fica parcialmente atrás de uma parede (coluna em 6,3)
+#  pra validar a oclusão correta contra o DDA de paredes.
+# ============================================================
+[CONFIG]
+WINDOW 960 560
+MM 150
+FOV 70
+NUM_RAYS 220
+MAX_DEPTH 30
+MOVE_SPEED 0.06
+MOUSE_SENS_X 0.004
+MOUSE_SENS_Y 1.0
+MAX_LOOK_Y 240
+FOG 0.6
+GRADIENT_STEPS 14
+AMBIENT 0.30
+FLOOR_BANDS 4
+FLOOR_STEP 2
+LIGHT_RES 8
+LIGHT_SOFT_SAMPLES 6
+LIGHT_SOFT_RADIUS 0.5
+LIGHT_BOUNCE 0.35
+LIGHT_BOUNCE_RADIUS 2.0
+
+[SPAWN]
+X 2.5
+Y 6.5
+ANGLE -60
+
+[INFO]
+NAME Demo Billboards
+AUTHOR AI Collaborator
+
+[COLORS]
+1 #8a7a63 #5c5041
+2 #4a4a55 #2e2e36
+
+[LIGHTS]
+1 #ffe6b3 5.5
+
+[THEME]
+SKY_BASE #17141c
+SKY_TOP #3a3248
+FLOOR_BASE #201c16
+FLOOR_TOP #3a3226
+CROSSHAIR #ffe6b3
+HUD_LIGHT #ffe6b3
+HUD_ALERT #ff5555
+MINIMAP_PLAYER #ffe6b3
+
+[TITLE]
+🪴 DEMO DE BILLBOARDS
+
+[BILLBOARDS]
+1 sprites/vaso_planta.png 0.0
+2 sprites/orbe_flutuante.png 0.9
+
+[MAP]
+1 1 1 1 1 1 1 1 1
+1 0 0 0 0 0 0 0 1
+1 0 L1 0 0 0 0 0 1
+1 0 0 0 0 2 0 0 1
+1 0 B1 0 0 2 0 B2 1
+1 0 0 0 0 2 0 0 1
+1 0 0 0 0 0 0 0 1
+1 1 1 1 1 1 1 1 1
