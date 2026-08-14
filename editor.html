@@ -94,16 +94,7 @@
   .addbtn{width:100%;background:var(--panel2);border:1px dashed var(--line);color:var(--dim);
     padding:8px;border-radius:4px;cursor:pointer;font-family:var(--mono);font-size:11px;}
   .addbtn:hover{border-color:var(--amber-dim);color:var(--amber);}
-  .thumb{width:36px;height:36px;object-fit:contain;background:#0006;border-radius:3px;
-    border:1px solid var(--line);}
-  .thumb-placeholder{width:36px;height:36px;background:#0006;border-radius:3px;
-    border:1px dashed var(--line);display:flex;align-items:center;justify-content:center;
-    font-size:14px;color:var(--dim);flex-shrink:0;}
   .hint{color:var(--dim);font-size:10.5px;line-height:1.5;margin-top:8px;}
-  .dirbtn{background:var(--panel2);border:1px solid var(--line);color:var(--dim);
-    padding:5px 8px;border-radius:4px;cursor:pointer;font-family:var(--mono);font-size:10.5px;
-    margin-top:6px;}
-  .dirbtn:hover{border-color:var(--amber-dim);color:var(--amber);}
   #status{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);
     background:#1a1714;border:1px solid var(--amber-dim);color:var(--amber);
     padding:8px 16px;border-radius:4px;font-size:12px;opacity:0;pointer-events:none;
@@ -206,10 +197,6 @@ let state = freshState();
 let tool = {kind:"wall", n:1}; // kind: empty | wall | light | billboard
 let painting = false;
 let paintValue = null;
-// Mapa caminho-relativo -> File, preenchido ao escolher a pasta do projeto
-// via <input webkitdirectory> (painel de billboards). Usado só pra
-// resolver prévias locais — nunca é gravado no .rcfg.
-let projectDirFiles = null;
 
 /* ───────────────────────── PARSER (mirror _parse_sections) ───────────────────────── */
 
@@ -364,7 +351,7 @@ function loadRcfg(text){
     const partes = valor.split(/[\s,]+/).filter(Boolean);
     const caminho = partes[0]||"";
     const offset = partes[1] ? parseFloat(partes[1]) : 0.0;
-    if(caminho) s.billboards[parseInt(tipo)] = [caminho, offset, null];
+    if(caminho) s.billboards[parseInt(tipo)] = [caminho, offset];
   }
 
   return s;
@@ -862,65 +849,10 @@ function panelTitle(root){
   root.appendChild(fs);
 }
 
-function normalizeRelPath(p){
-  return (p||"").replace(/\\/g,"/").replace(/^\.\//,"").replace(/^\/+/,"");
-}
-
-// Casa cada caminho relativo salvo em BILLBOARDS/TEXTURES com um arquivo
-// dentro da pasta do projeto escolhida via <input webkitdirectory>, e
-// resolve a prévia local de todos os billboards pendentes de uma vez —
-// sem precisar reselecionar arquivo por arquivo (Problema 1 do PLANO.md).
-function resolveBillboardPreviewsFromDir(files){
-  const byRelPath = new Map();
-  for(const f of files){
-    const rel = f.webkitRelativePath || f.name;
-    const semRaiz = normalizeRelPath(rel.split("/").slice(1).join("/"));
-    byRelPath.set(semRaiz, f);
-    byRelPath.set(normalizeRelPath(rel), f); // fallback com a raiz incluída
-  }
-  const jobs = [];
-  for(let n=1;n<=9;n++){
-    const bb = state.billboards[n];
-    if(!bb || !bb[0] || bb[2]) continue;
-    const file = byRelPath.get(normalizeRelPath(bb[0]));
-    if(!file) continue;
-    jobs.push(new Promise(resolve=>{
-      const reader = new FileReader();
-      reader.onload = ()=>{ bb[2] = reader.result; resolve(); };
-      reader.onerror = ()=>resolve();
-      reader.readAsDataURL(file);
-    }));
-  }
-  if(jobs.length){
-    Promise.all(jobs).then(()=>{ renderPanels(); paletteHTML(); });
-  }
-  return jobs.length;
-}
-
 function panelBillboards(root){
   const hint = document.createElement("div"); hint.className="hint";
-  hint.textContent = "Caminho da imagem (usado no jogo) + offset vertical. A prévia é só local — nunca é gravada no .rcfg.";
+  hint.textContent = "Caminho da imagem (usado no jogo) + offset vertical.";
   root.appendChild(hint);
-
-  const dirBtn = document.createElement("button"); dirBtn.className="dirbtn";
-  dirBtn.textContent = "📁 Selecionar pasta do projeto (resolve prévias automaticamente)";
-  const dirInput = document.createElement("input");
-  dirInput.type = "file"; dirInput.webkitdirectory = true; dirInput.multiple = true;
-  dirInput.style.display = "none";
-  dirInput.onchange = ()=>{
-    if(!dirInput.files || !dirInput.files.length) return;
-    projectDirFiles = dirInput.files;
-    const n = resolveBillboardPreviewsFromDir(projectDirFiles);
-    toast(n ? `Prévia resolvida para ${n} billboard(s).` : "Nenhum billboard pendente casou com a pasta escolhida.");
-  };
-  dirBtn.onclick = ()=> dirInput.click();
-  if(!("webkitdirectory" in dirInput)){
-    // Fallback gracioso: navegador sem suporte a seleção de pasta —
-    // esconde o botão em vez de oferecer algo que não funciona.
-    dirBtn.style.display = "none";
-  }
-  root.appendChild(dirBtn);
-  root.appendChild(dirInput);
 
   for(let n=1;n<=9;n++){
     const has = !!state.billboards[n];
@@ -934,36 +866,12 @@ function panelBillboards(root){
     }
     e.appendChild(head);
     if(has){
-      const top = document.createElement("div"); top.style.cssText="display:flex;gap:8px;align-items:center;margin-bottom:6px;";
-      let thumbEl;
-      if(state.billboards[n][2]){
-        thumbEl = document.createElement("img"); thumbEl.className="thumb";
-        thumbEl.src = state.billboards[n][2];
-      } else {
-        // Sem preview ainda (.rcfg carregado do disco não traz a imagem em
-        // si, só o caminho de texto) — placeholder explícito em vez de
-        // <img src=""> quebrado, que hoje passava a falsa impressão de bug
-        // (Problema 1 do PLANO.md).
-        thumbEl = document.createElement("div"); thumbEl.className="thumb-placeholder";
-        thumbEl.title = "sem prévia — selecione o arquivo local ou a pasta do projeto pra visualizar";
-        thumbEl.textContent = "🖼";
-      }
-      top.appendChild(thumbEl);
-      const fi = document.createElement("input"); fi.type="file"; fi.accept="image/*"; fi.style.fontSize="10px";
-      fi.onchange = ()=>{
-        const file = fi.files[0]; if(!file) return;
-        const reader = new FileReader();
-        reader.onload = ()=>{ state.billboards[n][2]=reader.result; renderPanels(); };
-        reader.readAsDataURL(file);
-      };
-      top.appendChild(fi);
-      e.appendChild(top);
       e.appendChild(field("Caminho no projeto (ex: sprites/planta.png)", state.billboards[n][0],
         v=>state.billboards[n][0]=v));
       e.appendChild(field("Offset Y", state.billboards[n][1], v=>state.billboards[n][1]=v, {type:"number", step:"0.1"}));
     } else {
       const add = document.createElement("button"); add.className="addbtn"; add.textContent="+ definir billboard";
-      add.onclick = ()=>{ state.billboards[n]=["", 0.0, null]; renderPanels(); paletteHTML(); };
+      add.onclick = ()=>{ state.billboards[n]=["", 0.0]; renderPanels(); paletteHTML(); };
       e.appendChild(add);
     }
     root.appendChild(e);
