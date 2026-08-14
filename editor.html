@@ -496,7 +496,7 @@ function paletteHTML(){
     "Ctrl+Z desfaz · Ctrl+Y refaz<br>"+
     "Shift+arraste = retângulo<br>"+
     "Ctrl+roda = zoom no cursor<br>"+
-    "Botão direito = apagar célula";
+    "Botão direito arrastando = apagar";
   el.appendChild(hint);
 }
 
@@ -723,8 +723,11 @@ let dragStart = null; // {i,j} quando shift+arraste pra retângulo
 let hoverEl = document.getElementById("hoverCoord");
 
 canvas.addEventListener("mousedown", e=>{
+  if (e.button !== 0 && e.button !== 2) return;
   painting = true;
-  paintValue = tokenFor(tool.kind, tool.n);
+  // Botão 0 (Esquerdo): usa a ferramenta selecionada.
+  // Botão 2 (Direito): força o valor a "0" (apagar).
+  paintValue = (e.button === 2) ? "0" : tokenFor(tool.kind, tool.n);
   beginStroke();
   const {i,j} = cellFromEvent(e);
   lastMousePos = {i, j};
@@ -766,17 +769,9 @@ window.addEventListener("mouseup", e=>{
   }
 });
 
+// Previne o menu de contexto padrão do botão direito no canvas
 canvas.addEventListener("contextmenu", e=>{
   e.preventDefault();
-  const {i,j} = cellFromEvent(e);
-  const rows=state.map.length, cols=state.map[0]?.length||0;
-  if(i>=0&&j>=0&&i<cols&&j<rows){
-    const old = state.map[j][i];
-    if(old!=="0"){
-      beginStroke(); recordChange(i,j,old); endStroke();
-      bumpStat(old,-1); state.map[j][i]="0"; drawCell(i,j);
-    }
-  }
 });
 
 // zoom com roda do mouse (Ctrl/Cmd + roda), centrado no cursor
