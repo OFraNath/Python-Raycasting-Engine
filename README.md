@@ -30,6 +30,8 @@ python main.py mapas/meu_mapa.rcfg
 
 Os mapas são salvos em arquivos texto no formato `.rcfg`. Veja abaixo como configurar cada seção.
 
+> **Importante:** Para que as texturas sejam carregadas corretamente, o arquivo `.rcfg` deve estar na mesma pasta onde a pasta/arquivos de textura estão localizados (ou com os caminhos relativos devidamente mapeados a partir do local do arquivo).
+
 ### Exemplo Rápido de `.rcfg`
 [TITLE]
 value Mapa de Teste
@@ -52,7 +54,7 @@ angle 0
 2 #882222 #661111
 
 [TEXTURES]
-1 texturas/parede_pedra.png
+1 parede_pedra.png
 
 [LIGHTS]
 7 #ffaa44 5.0
@@ -97,7 +99,7 @@ Define as cores das paredes quando **não** houver textura carregada.
 Mapeia uma imagem PNG/JPG para um tipo de parede.
 * **Sintaxe:** `ID caminho/relativo/imagem.png`
 * **Exemplo:** `1 texturas/tijolo.png`
-*(A imagem é tratada no espaço de cor sRGB com correção de Gamma 2.2 automática no shader)*.
+*(Certifique-se de que a pasta com as imagens esteja no mesmo diretório do arquivo `.rcfg` ou especificada a partir dele. A imagem é tratada no espaço de cor sRGB com correção de Gamma 2.2 automática no shader)*.
 
 ### 5. `[LIGHTS]` *(Fontes de Luz / Orbes)*
 Define a cor e o raio de alcance de pontos luminosos no mapa.
