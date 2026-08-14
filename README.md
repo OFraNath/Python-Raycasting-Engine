@@ -203,10 +203,10 @@ A pasta [`mapas/`](./mapas) já vem com alguns exemplos prontos para testar:
 
 ## 🧭 Roadmap / ideias futuras
 
-- [ ] Suporte a inimigos/sprites
+- [ ] Suporte a billboards/sprites
 - [ ] Editor visual de mapas (hoje é só texto)
 - [ ] Sistema de som posicional
-- [ ] Colisão mais refinada com paredes diagonais
+- [ ] Iluminação avançada
 
 *(sinta-se livre para abrir uma issue sugerindo algo)*
 
