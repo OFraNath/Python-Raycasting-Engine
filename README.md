@@ -203,8 +203,8 @@ A pasta [`mapas/`](./mapas) já vem com alguns exemplos prontos para testar:
 
 ## 🧭 Roadmap / ideias futuras
 
-- [ ] Suporte a billboards/sprites
-- [ ] Editor visual de mapas (hoje é só texto)
+- [ ] Suporte a entidades (billboards com IA e movimento)
+- [ ] Otimização de UX do editor de .rcfg
 - [ ] Sistema de som posicional
 - [ ] Iluminação avançada
 
