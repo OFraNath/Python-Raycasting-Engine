@@ -1,8 +1,8 @@
-# Raycasting FPS Engine (GPU Edition)
+# Raycasting FP Engine (Edição GPU)
 
 Engine de renderização pseudo-3D inspirada no estilo clássico de *Wolfenstein 3D*, mas executada **diretamente no Fragment Shader (GPU)** usando Pygame, ModernGL e OpenGL (GLSL 330) — em vez do raycasting tradicional feito coluna por coluna na CPU.
 
-O diferencial é o sistema de iluminação dinâmica: luzes seguem a lei do inverso do quadrado, projetam sombras suavizadas (penumbra) e ainda reemitem luz indiretamente nas paredes vizinhas (GI/Bounce), tudo calculado em tempo real no shader.
+O diferencial é o sistema de iluminação dinâmica: luzes seguem a lei do inverso do quadrado, projetam sombras suavizadas (penumbra) e ainda reemitem luz indiretamente nas paredes vizinhas (GI/Bounce), tudo calculado previamente assim que o .rcfg é carregado.
 
 ![status](https://img.shields.io/badge/status-em%20desenvolvimento-yellow)
 ![python](https://img.shields.io/badge/python-3.8%2B-blue)
@@ -179,7 +179,7 @@ Sintaxe: `ID COR_HEX RAIO`
 ```
 7 #ff8800 6.0
 ```
-Torcha com luz alaranjada e alcance de 6 blocos.
+Tocha com luz alaranjada e alcance de 6 blocos.
 
 #### `[MAP]` — layout do nível
 
@@ -203,10 +203,10 @@ A pasta [`mapas/`](./mapas) já vem com alguns exemplos prontos para testar:
 
 ## 🧭 Roadmap / ideias futuras
 
-- [ ] Suporte a inimigos/sprites
+- [ ] Suporte a billboards/sprites
 - [ ] Editor visual de mapas (hoje é só texto)
 - [ ] Sistema de som posicional
-- [ ] Colisão mais refinada com paredes diagonais
+- [ ] Iluminação avançada
 
 *(sinta-se livre para abrir uma issue sugerindo algo)*
 
