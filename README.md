@@ -172,7 +172,7 @@ Sintaxe: `ID caminho offset_y [escala]`. `offset_y` eleva o sprite em relação 
 
 ### 6. Partículas (sprites animados)
 
-Igual a billboard, mas gera várias instâncias flutuando e girando ao redor da célula. Definem-se em `[PARTICLES]` com tokens `P#`:
+Igual a billboard, mas gera várias instâncias flutuantes espalhadas pela célula, cada uma subindo e descendo devagar. Definem-se em `[PARTICLES]` com tokens `P#`:
 
 ```ini
 [PARTICLES]
