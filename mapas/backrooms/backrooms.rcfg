@@ -1,6 +1,4 @@
-# ============================================================
-#  RAYCASTING FPS — Mini Backrooms (16x16)
-# ============================================================
+# Gerado pelo RCFG Editor
 [CONFIG]
 WINDOW 960 560
 MM 160
@@ -10,11 +8,11 @@ MAX_DEPTH 30
 MOVE_SPEED 0.07
 RUN_MULTIPLIER 1.8
 MOUSE_SENS_X 0.004
-MOUSE_SENS_Y 1.0
+MOUSE_SENS_Y 1
 MAX_LOOK_Y 240
 FOG 0.35
 GRADIENT_STEPS 16
-AMBIENT 0.40
+AMBIENT 0.4
 FLOOR_BANDS 4
 FLOOR_STEP 2
 LIGHT_RES 8
@@ -24,7 +22,7 @@ LIGHT_BOUNCE 0.55
 LIGHT_BOUNCE_RADIUS 2.5
 LIGHT_BOUNCE_PASSES 2
 TEXTURE_SIZE 256
-WALL_SCALE 1.0
+WALL_SCALE 1
 
 [SPAWN]
 X 2.5
@@ -33,18 +31,19 @@ ANGLE 0
 
 [INFO]
 NAME Mini Backrooms
-AUTHOR Nathan
+AUTHOR Nathan & Gemini
 
 [COLORS]
 1 #d6c585 #9e8f54
 2 #222222 #111111
 
+[LIGHTS]
+1 #fff2a1 3.5
+2 #cceeff 2.5
+
 [TEXTURES]
 1 sprites/wall.jpg
-
-[LIGHTS]
-1 #fff2a1 5.5
-2 #cceeff 4.5
+2 sprites/metal.jpg
 
 [THEME]
 SKY_BASE #3a3520

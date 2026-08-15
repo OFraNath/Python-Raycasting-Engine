@@ -34,11 +34,12 @@ NAME Demo Billboards
 AUTHOR Claude
 
 [COLORS]
-1 #8a7a63 #5c5041
+1 #ff9500 #8a4c00
 2 #4a4a55 #2e2e36
 
 [LIGHTS]
 1 #ffe6b3 5.5
+2 #67fef4 4
 
 [THEME]
 SKY_BASE #17141c
@@ -54,15 +55,18 @@ MINIMAP_PLAYER #ffe6b3
 🪴 DEMO DE BILLBOARDS
 
 [BILLBOARDS]
-1 sprites/vaso_planta.png 0
-2 sprites/orbe_flutuante.png 0.9
+1 sprites/vaso_planta.png 0 1
+
+[PARTICLES]
+1 sprites/brilho.png 1 2 0.5
+2 sprites/vaso_planta.png 1 0.5 0
 
 [MAP]
-1 1 1 1 1 1 1 1 1
-1 0 0 0 0 0 0 0 1
-1 0 0+L1 0 0 0 0 0 1
-1 0 0 0 0 2 0 0 1
-1 0 0+B1 0 0 2 0 0+B2 1
-1 0 0 0 0 2 0 0 1
-1 0 0 0 0 0 0 0 1
-1 1 1 1 1 1 1 1 1
+1 1 1 1 1 2 2 2 2
+1 0 0 0 0 N 0+P1 0+P1 2
+1 0 0+L1 0 0 N 0+P1 0+P1 2
+1 0 0 0 0 2 0+P1 0+L2+P1 2
+1 0 0+P2 0 0 2 0+P1 0+B2+P1 2
+1 0 0 0 0 2 0+P1 0+P1 2
+1 0 0 0 0 N 0+P1 0+P1 2
+1 1 1 1 1 2 2 2 2
