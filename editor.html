@@ -330,7 +330,7 @@ function loadRcfg(text){
   s.config.window_w = parseInt(w)||960; s.config.window_h = parseInt(h)||560;
   s.config.mm = parseInt(cfg.mm ?? 140);
   s.config.fov = parseFloat(cfg.fov ?? 60);
-  s.config.num_rays = parseInt(cfg.num_rays ?? 180);
+  s.config.num_rays = parseInt(cfg.num_rays ?? DEFAULT_CONFIG.num_rays);
   s.config.max_depth = parseInt(cfg.max_depth ?? 30);
   s.config.move_speed = parseFloat(cfg.move_speed ?? 0.06);
   s.config.run_multiplier = parseFloat(cfg.run_multiplier ?? 1.8);
@@ -340,7 +340,7 @@ function loadRcfg(text){
   s.config.fog = parseFloat(cfg.fog ?? 1.4);
   s.config.gradient_steps = parseInt(cfg.gradient_steps ?? 14);
   s.config.ambient = parseFloat(cfg.ambient ?? 0.07);
-  s.config.floor_bands = parseInt(cfg.floor_bands ?? 4);
+  s.config.floor_bands = parseInt(cfg.floor_bands ?? DEFAULT_CONFIG.floor_bands);
   s.config.floor_step = parseInt(cfg.floor_step ?? 2);
   let lr = parseInt(cfg.light_res ?? 1);
   if(!LIGHT_RES_VALIDOS.includes(lr)) lr = LIGHT_RES_VALIDOS.reduce((a,b)=>Math.abs(b-lr)<Math.abs(a-lr)?b:a);

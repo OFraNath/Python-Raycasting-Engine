@@ -130,7 +130,7 @@ def _parse_config(d):
     cfg["window_height"] = _to_int(h, "WINDOW")
     cfg["mm"] = _to_int(d.get("mm", 140), "MM")
     cfg["fov"] = math_radians(_to_float(d.get("fov", 60), "FOV"))
-    cfg["num_rays"] = _to_int(d.get("num_rays", 180), "NUM_RAYS")
+    cfg["num_rays"] = _to_int(d.get("num_rays", DEFAULT_CONFIG["num_rays"]), "NUM_RAYS")
     cfg["max_depth"] = _to_int(d.get("max_depth", 30), "MAX_DEPTH")
     cfg["move_speed"] = _to_float(d.get("move_speed", 0.06), "MOVE_SPEED")
     cfg["run_multiplier"] = _to_float(d.get("run_multiplier", 1.8), "RUN_MULTIPLIER")
@@ -140,7 +140,7 @@ def _parse_config(d):
     cfg["fog"] = _to_float(d.get("fog", 1.4), "FOG")
     cfg["gradient_steps"] = _to_int(d.get("gradient_steps", 14), "GRADIENT_STEPS")
     cfg["ambient"] = _to_float(d.get("ambient", 0.07), "AMBIENT")
-    cfg["floor_bands"] = _to_int(d.get("floor_bands", 4), "FLOOR_BANDS")
+    cfg["floor_bands"] = _to_int(d.get("floor_bands", DEFAULT_CONFIG["floor_bands"]), "FLOOR_BANDS")
     cfg["floor_step"] = _to_int(d.get("floor_step", 2), "FLOOR_STEP")
     light_res = _to_int(d.get("light_res", 1), "LIGHT_RES")
     if light_res not in LIGHT_RES_VALIDOS:
@@ -593,7 +593,7 @@ tex_mmFlags = None
 # Mapas com essa quantidade de células (largura*altura) ou mais mostram uma
 # barra de progresso durante o cálculo de iluminação, em vez de travar a
 # janela sem feedback nenhum.
-LOADING_SCREEN_THRESHOLD_CELLS = 4096  # ex: um mapa 64x64 ou maior
+LOADING_SCREEN_THRESHOLD_CELLS = 256  # ex: um mapa 16x16 ou maior
 
 # Cache em memória (não vai pro disco): caminho absoluto do .rcfg -> última
 # posição/direção da câmera nele. Vive só enquanto o processo está rodando,
