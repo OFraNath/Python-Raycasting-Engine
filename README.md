@@ -30,9 +30,9 @@ Este README é um **guia de uso**: como rodar, como montar seu primeiro mapa do 
 
 ### Instalação
 
+Na pasta do projeto:
+
 ```bash
-git clone https://github.com/<seu-usuario>/Python-Raycasting-Engine.git
-cd Python-Raycasting-Engine
 pip install -r requirements.txt
 ```
 
@@ -204,7 +204,7 @@ moon_color #b9c6e0
 stars 140
 ```
 
-Veja a [tabela completa](#sky--ciclo-de-dia-e-noite).
+Veja a [tabela completa](#sky--ciclo-de-dia-e-noite-opcional).
 
 ### 8. Teste e itere
 
@@ -422,7 +422,7 @@ Todos os exemplos são arquivos `.rcfg` prontos. Rode com `python Raycasting.pyw
 
 ---
 
-## 🎨 Editor visual de mapas
+## Editor visual de mapas
 
 O repositório inclui [`editor.html`](./editor.html), que roda **direto no navegador** (sem servidor). Abra o arquivo localmente, monte o grid, configure texturas/luzes/céu/billboards/partículas e exporte o `.rcfg`. Ele também **abre** `.rcfg` existentes (arraste o arquivo para a página) e os reescreve na ordem canônica: `CONFIG`, `SPAWN`, `INFO`, `COLORS`, `LIGHTS`, `TEXTURES`, `THEME`, `SKY`, `TITLE`, `BILLBOARDS`, `PARTICLES`, `MAP`.
 
