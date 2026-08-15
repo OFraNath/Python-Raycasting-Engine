@@ -1407,6 +1407,11 @@ document.getElementById("btnNew").onclick = ()=>{
 document.getElementById("btnLoad").onclick = ()=>document.getElementById("fileInput").click();
 document.getElementById("fileInput").onchange = (e)=>{
   const file = e.target.files[0]; if(!file) return;
+  openFile(file);
+  e.target.value = "";
+};
+
+function openFile(file){
   const reader = new FileReader();
   reader.onload = ()=>{
     try{
@@ -1419,8 +1424,22 @@ document.getElementById("fileInput").onchange = (e)=>{
     }
   };
   reader.readAsText(file);
-  e.target.value = "";
-};
+}
+
+window.addEventListener("dragover", e=>{
+  const types = e.dataTransfer && Array.from(e.dataTransfer.types);
+  if(types && types.includes("Files")) e.preventDefault();
+});
+window.addEventListener("drop", e=>{
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if(!f) return;
+  e.preventDefault();
+  if(!/\.(rcfg|txt)$/i.test(f.name)){
+    toast("Solte um arquivo .rcfg");
+    return;
+  }
+  openFile(f);
+});
 
 document.getElementById("btnExport").onclick = ()=>{
   const text = serializeRcfg(state);

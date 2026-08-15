@@ -409,16 +409,14 @@ angle 0
 
 Todos os exemplos são arquivos `.rcfg` prontos. Rode com `python Raycasting.pyw caminho/do/mapa.rcfg` ou arraste para dentro da janela:
 
-| Mapa | O que demonstra |
-| :--- | :--- |
-| [`mapas/garden/garden.rcfg`](./mapas/garden/garden.rcfg) | Um jardim com texturas e luz ambiente |
-| [`mapas/backrooms/backrooms.rcfg`](./mapas/backrooms/backrooms.rcfg) | Labirinto com `wall_scale` alto (corredores altos) |
-| [`demos/showcase/showcase.rcfg`](./demos/showcase/showcase.rcfg) | **Autocontido** — céu dinâmico + partículas + billboards (abre só com a pasta dele) |
-| [`demos/festa_colorida.rcfg`](./demos/festa_colorida.rcfg) | Muitas luzes coloridas (stress de GI) |
-| [`demos/billboards/demo_billboards.rcfg`](./demos/billboards/demo_billboards.rcfg) | Billboards estáticos com oclusão |
-| [`demos/waifu_billboard/waifu_billboard.rcfg`](./demos/waifu_billboard/waifu_billboard.rcfg) | Billboards com imagens do dia a dia |
-| [`demos/graphics/Shader.rcfg`](./demos/graphics/Shader.rcfg) | Mapas com muitas paredes/tipos |
-| [`demos/graphics/Global Illumination.rcfg`](./demos/graphics/Global%20Illumination.rcfg) | Rebatimento de luz em cadeia (bounce) |
+- [`mapas/garden/garden.rcfg`](./mapas/garden/garden.rcfg)
+- [`mapas/backrooms/backrooms.rcfg`](./mapas/backrooms/backrooms.rcfg)
+- [`demos/showcase/showcase.rcfg`](./demos/showcase/showcase.rcfg)
+- [`demos/festa_colorida.rcfg`](./demos/festa_colorida.rcfg)
+- [`demos/billboards/demo_billboards.rcfg`](./demos/billboards/demo_billboards.rcfg)
+- [`demos/waifu_billboard/waifu_billboard.rcfg`](./demos/waifu_billboard/waifu_billboard.rcfg)
+- [`demos/graphics/Shader.rcfg`](./demos/graphics/Shader.rcfg)
+- [`demos/graphics/Global Illumination.rcfg`](./demos/graphics/Global%20Illumination.rcfg)
 
 ---
 
