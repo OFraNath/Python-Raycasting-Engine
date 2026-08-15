@@ -1,6 +1,3 @@
-# Raycasting FPS — versão GPU (pygame + moderngl / OpenGL)
-# Raycasting por pixel executado no fragment shader (GPU real).
-# Reusa o formato .rcfg e a grade de luz por orbes (light_grid) da engine Tk.
 import sys
 import os
 import re
@@ -102,12 +99,6 @@ def _parse_sections(caminho):
             continue
 
         if section == "MAP":
-            # Guarda os TOKENS crus (strings) em vez de já converter pra int
-            # aqui — os tokens podem ser números (parede/vazio) ou, no novo
-            # formato (Fase 4), letras: "L1".."L9" para luzes e "B1".."B9"
-            # para billboards. A tradução pra inteiro (o que a engine usa
-            # internamente) acontece em _process_map_tokens(), depois que
-            # já lemos o mapa inteiro e sabemos se é formato legado ou novo.
             celulas = [c for c in re.split(r"[\s,;]+", stripped) if c]
             dados["MAP"].append(celulas)
         elif section == "TITLE":
@@ -144,7 +135,6 @@ def _parse_config(d):
     cfg["floor_step"] = _to_int(d.get("floor_step", 2), "FLOOR_STEP")
     light_res = _to_int(d.get("light_res", 1), "LIGHT_RES")
     if light_res not in LIGHT_RES_VALIDOS:
-        # ajusta para o valor válido mais próximo em vez de travar o mapa
         light_res = min(LIGHT_RES_VALIDOS, key=lambda v: abs(v - light_res))
     cfg["light_res"] = light_res
     cfg["light_soft_samples"] = _to_int(d.get("light_soft_samples", 6), "LIGHT_SOFT_SAMPLES")
@@ -220,8 +210,6 @@ SKY_DEFAULTS = {
 
 
 def _parse_sky(d):
-    # Seção [SKY] é opcional (PLANO.md item 2): sem ela, sky fica igual ao
-    # comportamento atual (só o gradiente do THEME, sem sol/lua/estrelas).
     sky = dict(SKY_DEFAULTS)
     sky["enabled"] = bool(d)
     if not d:
@@ -229,15 +217,6 @@ def _parse_sky(d):
     sky["cycle"] = str(d.get("cycle", "false")).strip().lower() in ("1", "true", "yes")
     sky["day_length"] = max(1.0, _to_float(d.get("day_length", 120), "SKY DAY_LENGTH"))
     sky["start_time"] = _to_float(d.get("start_time", 8), "SKY START_TIME") % 24.0
-    # sun_peak: maior elevação que o sol atinge ao meio-dia (graus acima do
-    # horizonte), default 45. 45 = o arco inteiro (nascer→zênite→pôr) fica
-    # visível no viewport olhando reto: o topo da tela cobre ~54.5° no showcase
-    # (FOV 70) e ~49° no garden (FOV 60), então um pico de 60 fazia o astro
-    # subir para fora da tela no meio-dia (a trajetória parecia "à distância").
-    # 90 = zênite (passa exatamente por cima da cabeça — no viewport o astro
-    # fica acima da tela mesmo olhando para cima); valores menores deixam o
-    # arco mais baixo/raso. A curva de luz do dia (day_factor/night_factor) é
-    # normalizada por sin(sun_peak): o meio-dia continua no brilho máximo.
     sky["sun_peak"] = max(10.0, min(90.0, _to_float(d.get("sun_peak", 45), "SKY SUN_PEAK")))
     sky["sun_color"] = _parse_color(d.get("sun_color", "#fff2c0"))
     sky["moon_color"] = _parse_color(d.get("moon_color", "#b9c6e0"))
@@ -246,10 +225,6 @@ def _parse_sky(d):
 
 
 def _parse_textures(d):
-    # Seção [TEXTURES]: "tipo caminho/relativo/textura.png" — mesmo padrão
-    # de [COLORS], mas o valor é só um caminho (resolvido depois, relativo
-    # à pasta do .rcfg, em load_rcfg). Tipos sem entrada aqui continuam
-    # usando [COLORS] normalmente (fallback).
     texturas = {}
     for tipo, valor in d.items():
         try:
@@ -279,30 +254,16 @@ def _parse_lights(d):
     return lights
 
 
-# Formato LEGADO (compatível com mapas antigos): dígitos 0-9 direto.
-#   0 = vazio, 1-6 = parede, 7+ = luz (ORB_MIN_LEGADO)
 WALL_MAX_LEGADO = 6
 ORB_MIN_LEGADO = 7
 
-# Formato NOVO (Fase 4): luz vira letra "L" em vez de dígito, o que libera
-# os dígitos 7, 8 e 9 pra serem usados como paredes/texturas extras.
-#   0 = vazio, 1-9 = parede, "L1".."L9" = luz, "B1".."B9" = billboard
 WALL_MAX_NOVO = 9
-ORB_MIN_NOVO = 100  # offset interno alto, só pra não colidir com paredes 1-9
+ORB_MIN_NOVO = 100
 
-# Parede invisível ("N" no [MAP]): bloqueia o jogador (is_wall) mas fica fora da
-# faixa 1..WALL_MAX que o shader testa pra desenhar/colidir com o raio — então
-# nunca é renderizada nem aparece no minimapa. Um único tipo, sem cor/textura.
-# Valor 99: fica no vão livre entre WALL_MAX_NOVO (9) e ORB_MIN_NOVO (100), então
-# também não é confundido com luz/orb pelo shader (que testa "t >= u_orbMin").
 INVISIBLE_WALL = 99
 
 
 def _split_map_token(tok):
-    # Divide um token do [MAP] em (base, extras) — PLANO.md item 4: célula
-    # aceita "base[+extra...]", onde extra é "L#"/"B#"/"P#". Um token que já
-    # COMEÇA com L/B/P (formato antigo, sem "+", ex. "L1" sozinho) é tratado
-    # como extra isolado com base implícita "0" — retrocompatível.
     partes = tok.split("+")
     base = partes[0]
     extras = partes[1:]
@@ -314,9 +275,6 @@ def _split_map_token(tok):
 
 
 def _process_map_tokens(raw_rows):
-    # Detecta automaticamente se o mapa usa o formato novo (com L/B/P/N/"+")
-    # ou o legado (só dígitos) — assim mapas antigos continuam funcionando
-    # exatamente como antes, sem precisar de nenhuma migração manual.
     is_new_format = False
     for row in raw_rows:
         for tok in row:
@@ -330,9 +288,9 @@ def _process_map_tokens(raw_rows):
     orb_min = ORB_MIN_NOVO if is_new_format else ORB_MIN_LEGADO
 
     grid = []
-    billboards = []  # lista de (x_central, y_central, tipo)
-    particles = []   # lista de (x_central, y_central, tipo) — mesmo padrão de billboards
-    light_cells = {}  # (x, y) -> valor de luz codificado (orb_min + n - 1)
+    billboards = []
+    particles = []
+    light_cells = {}
     for j, row in enumerate(raw_rows):
         int_row = []
         for i, tok in enumerate(row):
@@ -368,13 +326,6 @@ def _process_map_tokens(raw_rows):
 
 
 def _parse_billboards(d, pasta_base):
-    # Seção [BILLBOARDS]: "ID caminho/imagem.png offset_y [escala]"
-    # offset_y é a distância vertical (unidades de mundo) entre o chão e a
-    # base do sprite — 0.0 encosta no chão, valores positivos deixam o
-    # sprite "flutuando" a uma altura fixa (ex: pés de um personagem que
-    # deve tocar o chão visualmente, mas a imagem tem uma margem embaixo).
-    # escala é opcional (default 1.0) — multiplica o tamanho do sprite,
-    # que por padrão ocupa 1 unidade de mundo de altura.
     billboards = {}
     for tipo, valor in d.items():
         try:
@@ -391,15 +342,11 @@ def _parse_billboards(d, pasta_base):
     return billboards
 
 
-# Amplitude fixa (unidades de mundo) do flutuar vertical das partículas —
-# não é exposta no .rcfg de propósito (PLANO.md item 3 só pede caminho,
-# quantidade, velocidade e espalhamento por tipo).
 PARTICLE_FLOAT_AMPLITUDE = 0.18
 PARTICLE_SCALE = 0.35
 
 
 def _parse_particles(d, pasta_base):
-    # Seção [PARTICLES]: "ID caminho/imagem.png quantidade velocidade espalhamento"
     particles = {}
     for tipo, valor in d.items():
         try:
@@ -419,9 +366,6 @@ def _parse_particles(d, pasta_base):
 
 
 def _particle_instances(particle_cells, particle_defs):
-    # Posição inicial pseudo-aleatória determinística (seed = posição da
-    # célula + índice da instância), dentro do raio de espalhamento —
-    # mesmo mapa sempre gera as mesmas partículas (PLANO.md item 3).
     out = []
     for (cx, cy, tipo) in particle_cells:
         if tipo not in particle_defs:
@@ -458,15 +402,9 @@ def load_rcfg(caminho):
 
     lights = _parse_lights(dados.get("LIGHTS", {}))
     if is_new_format:
-        # No formato novo, a seção [LIGHTS] é escrita com índices 1-9
-        # (correspondendo a L1..L9), então traduzimos pras mesmas chaves
-        # internas (orb_min + n-1) usadas na grade do mapa.
         lights = {orb_min + (n - 1): v for n, v in lights.items() if 1 <= n <= 9}
 
     billboard_defs = _parse_billboards(dados.get("BILLBOARDS", {}), pasta_base)
-    # (x, y, caminho, offset_y, escala, amplitude, velocidade, fase) — os
-    # últimos 3 campos só são != 0 pras partículas (flutuar animado);
-    # billboard estático fica com amplitude 0 (sem movimento).
     billboard_instances = [
         (x, y, billboard_defs[tipo][0], billboard_defs[tipo][1], billboard_defs[tipo][2], 0.0, 0.0, 0.0)
         for (x, y, tipo) in billboard_cells
@@ -509,13 +447,9 @@ BOOT_MAP_TOKENS = [
     ["1"] + ["0"] * 10 + ["1"],
     ["1"] * 12,
 ]
-# Placeholder da tela sem .rcfg carregado. Usa o mesmo tokenizer de qualquer
-# mapa real (token "L1" em vez do dígito legado "7") — assim a luz cai em
-# LIGHT_CELLS e ganha cor certa tanto no minimapa quanto na cena 3D (ver
-# BOOT_LIGHT_ORBS abaixo), sem precisar de um caminho de código à parte.
 (BOOT_MAP, _boot_bb, _boot_particles, BOOT_LIGHT_CELLS,
  BOOT_WALL_MAX, BOOT_ORB_MIN, _boot_is_new) = _process_map_tokens(BOOT_MAP_TOKENS)
-BOOT_LIGHT_ORBS = {BOOT_ORB_MIN: ("#ffcc88", 4.0)}  # cor da luz L1 do placeholder
+BOOT_LIGHT_ORBS = {BOOT_ORB_MIN: ("#ffcc88", 4.0)}
 
 THEME_DEFAULTS = {
     "sky_base": "#080a23",
@@ -529,8 +463,6 @@ THEME_DEFAULTS = {
     "title": "Raycasting FPS GPU",
 }
 
-# Preset de céu noturno usado no lerp dia/noite (PLANO.md item 2) — mais
-# escuro/azulado que o gradiente diurno do [THEME].
 NIGHT_SKY_BASE = "#02030f"
 NIGHT_SKY_TOP = "#05061f"
 
@@ -547,21 +479,21 @@ MAX_LOOK_Y = DEFAULT_CONFIG["max_look_y"]
 FOG = DEFAULT_CONFIG["fog"]
 AMBIENT = DEFAULT_CONFIG["ambient"]
 
-# ── Céu: sol/lua/estrelas + ciclo dia-noite (PLANO.md item 2) ──
+# ── Céu: sol/lua/estrelas + ciclo dia-noite ──
 SKY = dict(SKY_DEFAULTS)
 SKY["enabled"] = False
-SKY_TIME = SKY_DEFAULTS["start_time"]   # 0..24, horas "de jogo"
-SKY_PAUSED = False                      # tecla P pausa/retoma o ciclo
+SKY_TIME = SKY_DEFAULTS["start_time"]
+SKY_PAUSED = False
 
 MAP = [row[:] for row in BOOT_MAP]
 MAP_W = len(MAP[0])
 MAP_H = len(MAP)
 WALL_COLORS = {}
-WALL_TEXTURES = {}   # tipo -> caminho absoluto (resolvido a partir do .rcfg)
+WALL_TEXTURES = {}
 TEXTURE_SIZE = DEFAULT_CONFIG["texture_size"]
 THEME = dict(THEME_DEFAULTS)
 LIGHT_ORBS = dict(BOOT_LIGHT_ORBS)
-LIGHT_CELLS = dict(BOOT_LIGHT_CELLS)  # (x, y) -> valor de luz codificado; camada separada da grade (PLANO.md item 4)
+LIGHT_CELLS = dict(BOOT_LIGHT_CELLS)
 ORB_MIN = BOOT_ORB_MIN
 WALL_MAX = BOOT_WALL_MAX
 LIGHT_RES = DEFAULT_CONFIG["light_res"]
@@ -578,28 +510,19 @@ LIGHT_H = MAP_H
 px, py, pangle, look_y = 1.5, 1.5, 0.0, 0.0
 SPAWN = (1.5, 1.5, 0.0)
 
-# ── Billboards (Fase 5): lista de (x, y, caminho_abs_textura, offset_y) ──
+# ── Billboards e partículas ──
 BILLBOARDS = []
-MAX_BILLBOARD_INSTANCES = 128  # limite de sprites simultâneos no mapa (Fase 5 + partículas, item 3)
-BILLBOARD_LAYERS = 9           # nº de "slots" de textura únicos suportados
-_BB_LAYER_BY_PATH = {}         # caminho_abs -> índice de camada no array da GPU
-_BB_ASPECT_BY_PATH = {}        # caminho_abs -> aspect ratio (largura/altura) original
+MAX_BILLBOARD_INSTANCES = 128
+BILLBOARD_LAYERS = 9
+_BB_LAYER_BY_PATH = {}
+_BB_ASPECT_BY_PATH = {}
 tex_bbTex = None
-# ── Flags por célula pro minimapa (Problema 7 do PLANO.md) ──
-# bit 1 = barreira invisível, bit 2 = tem billboard, bit 4 = tem luz.
+# ── Flags por célula pro minimapa ──
 tex_mmFlags = None
 
-# ── Tela de carregamento (Fase 2) ──
-# Mapas com essa quantidade de células (largura*altura) ou mais mostram uma
-# barra de progresso durante o cálculo de iluminação, em vez de travar a
-# janela sem feedback nenhum.
-LOADING_SCREEN_THRESHOLD_CELLS = 256  # ex: um mapa 16x16 ou maior
+# ── Tela de carregamento (estado) ──
+LOADING_SCREEN_THRESHOLD_CELLS = 256
 
-# Cache em memória (não vai pro disco): caminho absoluto do .rcfg -> última
-# posição/direção da câmera nele. Vive só enquanto o processo está rodando,
-# tipo um "localStorage" da sessão. Ao voltar pra um mapa já visitado nessa
-# mesma execução, a câmera reaparece de onde você tinha saído em vez de
-# voltar pro SPAWN do arquivo.
 MAP_POSITIONS = {}
 
 
@@ -623,17 +546,11 @@ def _rgb(h):
     return (int(h[1:3], 16), int(h[3:5], 16), int(h[5:7], 16))
 
 
-# ══ CARREGADOR DE ASSETS (Fase 1) ════════════════════════════════
-# Cache em memória: (caminho_absoluto, tamanho) -> pygame.Surface já pronta
-# (RGBA, redimensionada). Evita recarregar/redimensionar a mesma imagem
-# várias vezes (ex: dois tipos de parede usando a mesma textura).
+# ══ CARREGADOR DE ASSETS ════════════════════════════════
 _ASSET_CACHE = {}
 
 
 def _fallback_array(tamanho):
-    # Xadrez magenta/preto — "textura de erro" clássica, bem visível, pra
-    # avisar que um asset referenciado no .rcfg não foi encontrado sem
-    # travar o carregamento do mapa inteiro.
     w, h = tamanho
     arr = np.zeros((h, w, 4), dtype=np.uint8)
     cel = max(1, min(w, h) // 8)
@@ -647,20 +564,6 @@ def _fallback_array(tamanho):
 
 
 def load_asset_image(caminho_abs, tamanho, contain=False):
-    # Todo caminho de asset já deve chegar aqui RESOLVIDO (absoluto),
-    # relativo à pasta do .rcfg — ver load_rcfg(). tamanho é obrigatório
-    # aqui pq o texture array da GPU exige que todas as camadas tenham o
-    # mesmo tamanho (ver upload_wall_textures / upload_textures).
-    #
-    # Usa Pillow em vez de pygame.image.load: suporte a WEBP mais confiável
-    # e detecção de canal alpha mais previsível, independente de como o
-    # pygame/SDL_image local foi compilado (Problema 3 do PLANO.md).
-    #
-    # Retorna (array_rgba_uint8 do tamanho pedido, aspect_ratio_original).
-    # Com contain=True (billboards), a imagem é redimensionada preservando
-    # a proporção original e centralizada num quadro `tamanho`, com a
-    # sobra preenchida em alpha 0 — sem contain (paredes), a imagem é
-    # esticada direto pro tamanho pedido, como antes (Problema 4).
     key = (caminho_abs, tamanho, contain)
     cached = _ASSET_CACHE.get(key)
     if cached is not None:
@@ -668,9 +571,6 @@ def load_asset_image(caminho_abs, tamanho, contain=False):
 
     try:
         raw = Image.open(caminho_abs)
-        # Detecta se a imagem de origem tem canal alpha ANTES do convert()
-        # forçado abaixo, já que convert("RGBA") sempre adiciona um canal A
-        # (opaco) mesmo pra formatos sem transparência (ex. JPG).
         has_alpha = ("A" in raw.getbands()) or ("transparency" in raw.info)
         img = raw.convert("RGBA")
     except Exception as e:
@@ -690,11 +590,6 @@ def load_asset_image(caminho_abs, tamanho, contain=False):
     w, h = img.size
     aspect = (w / h) if h else 1.0
 
-    # "Unmatte": zera o RGB de pixels quase totalmente transparentes antes
-    # do resize. Neutraliza matte branco/lixo assado na borda de PNGs
-    # "transparentes" mal exportados, sem precisar reexportar a arte —
-    # e de quebra evita que esse lixo vaze pra dentro da borda durante o
-    # resize suave / mipmaps (Problema 2 do PLANO.md).
     arr = np.array(img, dtype=np.uint8)
     alpha_f = arr[:, :, 3].astype(np.float32) / 255.0
     quase_transparente = alpha_f < 0.02
@@ -729,15 +624,10 @@ def is_wall(c):
 
 
 def _blocks_light(c):
-    # Só paredes de verdade bloqueiam luz — a parede invisível (99) não é
-    # desenhada, então não deve projetar sombra (ver PLANO.md item 1).
     return 1 <= c <= WALL_MAX
 
 
 def _los_blocked_f(x0, y0, x1, y1):
-    # Igual a antes, mas trabalha com posições contínuas (float) em vez de
-    # células inteiras — usado pra testar visibilidade a partir de cada
-    # amostra do "disco" da luz.
     dx, dy = x1 - x0, y1 - y0
     dist = math.hypot(dx, dy)
     if dist <= 1e-6:
@@ -752,20 +642,6 @@ def _los_blocked_f(x0, y0, x1, y1):
 
 
 def compute_light_grid(on_progress=None):
-    # Cada subcelula guarda luz em RGB (não só intensidade), o que permite
-    # tochas coloridas e luz "quicando" nas paredes (bounce/GI simples).
-    #
-    # Penumbra: em vez de testar visibilidade de um único ponto da luz,
-    # testamos um pequeno "disco" de amostras ao redor do centro dela. Perto
-    # de uma quina, parte das amostras enxerga a luz e parte não — o
-    # resultado é uma fração (ex: 0.33, 0.66) em vez de um binário
-    # bloqueado/livre, o que cria uma transição suave de sombra em vez de
-    # um corte seco.
-    #
-    # Esse teste de visibilidade é feito por CÉLULA inteira (não por
-    # subcelula) pra manter o custo baixo — a suavidade final na tela vem
-    # da combinação disso com a interpolação LINEAR da textura e com a
-    # queda de intensidade calculada por subcelula.
     global light_grid, light_grid_np, LIGHT_W, LIGHT_H
     res = max(1, LIGHT_RES)
     LIGHT_W = MAP_W * res
@@ -808,24 +684,7 @@ def compute_light_grid(on_progress=None):
                         dist = math.hypot(wx - cx, dy)
                         if dist > raio:
                             continue
-                        # Atenuação "inverse-square windowed" (o mesmo tipo de
-                        # curva usada em point lights de motores tipo UE4) em
-                        # vez de rampa linear (1 - dist/raio). A luz real cai
-                        # com o quadrado da distância — bem concentrada perto
-                        # da fonte e com uma cauda mais longa e suave, em vez
-                        # da rampa reta que "parece feita à mão".
                         d = dist / raio
-                        # smoothstep em vez da curva "inverse-square windowed"
-                        # anterior (d^4 janelado + termo racional). Aquela
-                        # curva era íngreme/muito não-linear perto da borda,
-                        # e a suavidade da sombra/penumbra depende de a
-                        # queda de luz ser razoavelmente gradual — o teste de
-                        # visibilidade é feito por CÉLULA inteira (ver
-                        # comentário acima). Fórmula com núcleo concentrado
-                        # (quase constante perto da fonte, cauda em lei de
-                        # potência inversa) + corte final suavizado só nos
-                        # últimos 25% do raio (PLANO.md item 5) — sombra
-                        # mais forte e fading mais natural, sem mudar custo.
                         core = 1.0 / (1.0 + 6.0 * d * d)
                         edge = max(0.0, min(1.0, (1.0 - d) / 0.25))
                         edge = edge * edge * (3.0 - 2.0 * edge)
@@ -837,18 +696,8 @@ def compute_light_grid(on_progress=None):
                         cell[1] += cor_rgb[1] * falloff
                         cell[2] += cor_rgb[2] * falloff
 
-    # luz direta das tochas/orbes
-    # Pesos de progresso: a passada direta costuma dominar o custo total
-    # (cresce com nº de luzes x raio^2), então ela recebe 70% da barra; os
-    # 30% restantes ficam pros passes de bounce/GI abaixo. Não é uma medida
-    # exata de tempo, mas dá um feedback razoável e monotônico pro usuário.
     for y in range(MAP_H):
         for x in range(MAP_W):
-            # Formato novo: luz vive em LIGHT_CELLS (camada separada da
-            # grade, PLANO.md item 4), o que permite luz coexistir com
-            # parede/piso/billboard/partícula na mesma célula. Formato
-            # legado continua com a luz codificada direto no valor da
-            # grade (dígito >= ORB_MIN) — fallback abaixo preserva isso.
             t = LIGHT_CELLS.get((x, y))
             if t is None:
                 t = MAP[y][x]
@@ -860,21 +709,10 @@ def compute_light_grid(on_progress=None):
         if on_progress is not None:
             on_progress(0.7 * (y + 1) / MAP_H)
 
-    # bounce: paredes iluminadas reemitem uma fração da própria cor pras
-    # celulas vizinhas — luz vermelha perto de parede azul tinge o entorno.
-    # Fazemos vários PASSES: cada passe congela o estado atual da grade
-    # (luz direta + bounces anteriores) e deixa as paredes reemitirem de
-    # novo a partir dali. Isso aproxima uma iluminação global de verdade
-    # (radiosity) — a luz "quica" mais de uma vez e se espalha mais longe
-    # pelos cantos, em vez de um único salto que mal sai da célula ao lado
-    # da tocha. Cada passe usa uma cópia congelada (nunca a grade "viva"),
-    # senão uma parede processada no meio do loop já reemitiria o bounce
-    # de vizinhas processadas antes dela no MESMO passe — cascata que
-    # se acumula mais forte nas quinas.
     if LIGHT_BOUNCE > 0:
         for passe in range(max(1, LIGHT_BOUNCE_PASSES)):
             luz_atual = [[list(cell) for cell in row] for row in grid]
-            decaimento = LIGHT_BOUNCE * (0.6 ** passe)  # cada passe extra contribui menos
+            decaimento = LIGHT_BOUNCE * (0.6 ** passe)
             for y in range(MAP_H):
                 for x in range(MAP_W):
                     t = MAP[y][x]
@@ -886,7 +724,7 @@ def compute_light_grid(on_progress=None):
                     cj = min(LIGHT_H - 1, y * res + res // 2)
                     recv_intensity = sum(luz_atual[cj][ci]) / 3.0
                     if recv_intensity <= AMBIENT * 1.05:
-                        continue  # parede às escuras não quica nada relevante
+                        continue
                     bounce_rgb = tuple(wall_rgb[k] * recv_intensity * decaimento for k in range(3))
                     add_light(x, y, LIGHT_BOUNCE_RADIUS, bounce_rgb)
                 if on_progress is not None:
@@ -904,8 +742,7 @@ def compute_light_grid(on_progress=None):
             cell[2] = min(9.0, cell[2])
 
     light_grid = grid
-    light_grid_np = np.array(grid, dtype=np.float32)  # shape (H, W, 3)
-
+    light_grid_np = np.array(grid, dtype=np.float32)
 
 
 def open_cell(cx, cy):
@@ -935,7 +772,6 @@ FRAG = """
 #version 330 core
 in vec2 uv;
 out vec4 outColor;
-
 uniform vec2 u_res;
 uniform vec2 u_pos;
 uniform vec2 u_dir;
@@ -946,58 +782,39 @@ uniform float u_scale;
 uniform float u_ambient;
 uniform float u_fog;
 uniform float u_depth;
-
-// Fase 4: em vez de constantes fixas (#define ORB_MIN 7, "t<=6"), agora
-// são uniforms — o intervalo de ids de parede e o id mínimo de luz mudam
-// conforme o mapa é legado (paredes 1-6, luz é dígito >=7) ou novo
-// (paredes 1-9, luz é a letra "L1".."L9", offset interno alto).
 uniform float u_wallMax;
 uniform float u_orbMin;
-
-uniform sampler2D u_map;    // tipo de celula (R32F)
-uniform sampler2D u_light;  // grade de luz (R32F)
-uniform sampler2D u_palA;   // cor A por tipo (RGBA32F)
-uniform sampler2D u_palB;   // cor B por tipo
-uniform sampler2DArray u_wallTex;  // texturas por tipo (Fase 2), 1 camada por tipo
-uniform sampler2D u_hasTex;        // 1.0 = tipo tem textura própria, 0.0 = usa cor sólida
-
-// Fase 5: billboards (sprites sempre de frente pra câmera)
+uniform sampler2D u_map;
+uniform sampler2D u_light;
+uniform sampler2D u_palA;
+uniform sampler2D u_palB;
+uniform sampler2DArray u_wallTex;
+uniform sampler2D u_hasTex;
 uniform int u_bbCount;
 uniform vec2 u_bbPos[128];
 uniform float u_bbLayer[128];
 uniform float u_bbYOff[128];
-uniform float u_bbAspect[128];  // largura/altura original de cada sprite (Problema 4 do PLANO.md)
-uniform float u_bbScale[128];   // multiplicador de tamanho por instância (escala do .rcfg)
-uniform float u_bbAmp[128];     // amplitude do flutuar vertical (0 = billboard estático)
-uniform float u_bbVel[128];     // velocidade do flutuar (item 3 do PLANO.md)
-uniform float u_bbPhase[128];   // fase inicial (determinística por instância)
-uniform float u_time;           // segundos desde o início, pro flutuar das partículas
+uniform float u_bbAspect[128];
+uniform float u_bbScale[128];
+uniform float u_bbAmp[128];
+uniform float u_bbVel[128];
+uniform float u_bbPhase[128];
+uniform float u_time;
 uniform sampler2DArray u_bbTex;
-uniform sampler2D u_mmFlags;       // flags por célula só pro minimapa (Problema 7)
-
+uniform sampler2D u_mmFlags;
 uniform vec3 u_skyB, u_skyT, u_floorB, u_floorT;
 uniform float u_sunAngle, u_sunElev, u_nightFactor, u_starsCount, u_skyBodies;
 uniform vec3 u_sunColor, u_moonColor;
 uniform vec3 u_cross;
 uniform vec3 u_mmPlayer;
-
-uniform vec2 u_mmPos;    // pixel do canto sup-esq do minimapa
-uniform vec2 u_mmSize;   // pixel
-uniform float u_mmCell;  // pixels por celula
-uniform vec2 u_playerPix;// pixel do jogador no minimapa
-uniform vec2 u_dirPix;   // ponta da linha de direcao
-
+uniform vec2 u_mmPos;
+uniform vec2 u_mmSize;
+uniform float u_mmCell;
+uniform vec2 u_playerPix;
+uniform vec2 u_dirPix;
 vec2 mapTex(vec2 cell) { return vec2((cell.x + 0.5) / u_mapSize.x, (cell.y + 0.5) / u_mapSize.y); }
 int cellType(vec2 cell) { return int(round(texture(u_map, mapTex(cell)).r)); }
-// worldPos é uma posição contínua no mundo (não uma célula inteira).
-// A textura de luz tem resolução mais fina que o mapa (LIGHT_RES subcelulas
-// por bloco) e usa filtro LINEAR, então isso dá um gradiente suave em vez
-// de luz "em blocos".
 vec3 softClip(vec3 x, float knee, float maxv) {
-    // Identidade até 'knee' (a esmagadora maioria da cena passa reta,
-    // sem escurecer nada). Só o que passa de 'knee' é comprimido de forma
-    // suave em direção a 'maxv' — o cotovelo vira uma curva em vez de um
-    // corte seco, sem afetar o brilho geral do resto da imagem.
     vec3 over = max(x - vec3(knee), vec3(0.0));
     vec3 compressed = (maxv - knee) * (vec3(1.0) - exp(-over / (maxv - knee)));
     return min(x, vec3(knee)) + compressed;
@@ -1016,31 +833,17 @@ float hasWallTex(float t) {
     return texture(u_hasTex, vec2((t + 0.5) / 256.0, 0.5)).r;
 }
 vec3 wallTexColor(float t, vec2 uvFace) {
-    // camada = tipo - 1 (tipos vão de 1 a TEXTURE_LAYERS)
     return texture(u_wallTex, vec3(uvFace, t - 1.0)).rgb;
 }
-
-// ── céu: sol/lua/estrelas (PLANO.md item 2) ──
-// u_skyBodies é 0.0 quando o .rcfg não tem seção [SKY]: nesse caso as
-// contribuições abaixo somam zero e o gradiente fica idêntico ao atual.
 float starHash(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
 }
-
 vec3 celestialContrib(vec2 dirWorld, float elevSin, vec3 col, float pixX, float row) {
-    // Mesma técnica de projeção câmera-espaço usada nos billboards, só que
-    // "dirWorld" é uma direção (astro no infinito) em vez de uma posição.
     float invDet = 1.0 / (u_plane.x * u_dir.y - u_dir.x * u_plane.y);
     float tx = invDet * (u_dir.y * dirWorld.x - u_dir.x * dirWorld.y);
     float ty = invDet * (-u_plane.y * dirWorld.x + u_plane.x * dirWorld.y);
     if (ty <= 0.02) return vec3(0.0);
     float screenX = (u_res.x * 0.5) * (1.0 + tx / ty);
-    // Projeção de cúpula: mesma fórmula das estrelas (elevSin = ry/sqrt(rx²+ry²+rz²)).
-    // A antiga projeção linear (u_horizon - elevSin*u_scale*0.5) esmagava o astro
-    // na direção do horizonte: o zênite (elevSin=1) aparecia a só ~45° de altura.
-    // rx usa length(u_plane) igual ao domo das estrelas. Sem clamp no topo: quando
-    // a elevação passa do limite do viewport o astro sai da tela como as estrelas
-    // (olhar para cima para vê-lo) — nunca fica preso/escorregando na borda.
     float rx = length(u_plane) * (tx / ty);
     float tanE = elevSin / sqrt(max(1.0 - elevSin * elevSin, 1e-4));
     float ry = tanE * sqrt(rx * rx + 1.0);
@@ -1050,7 +853,6 @@ vec3 celestialContrib(vec2 dirWorld, float elevSin, vec3 col, float pixX, float 
     float fade = clamp(elevSin * 6.0 + 0.3, 0.0, 1.0);
     return col * mask * fade;
 }
-
 vec3 skyColor(float row, vec2 rayDir, float pixX) {
     vec3 base = mix(u_skyB, u_skyT, clamp(row / max(u_horizon, 1.0), 0.0, 1.0));
     if (u_skyBodies < 0.5) return base;
@@ -1059,25 +861,11 @@ vec3 skyColor(float row, vec2 rayDir, float pixX) {
     base += celestialContrib(-sunDir, -u_sunElev, u_moonColor, pixX, row);
     if (u_starsCount > 0.5 && u_nightFactor > 0.02) {
         float az = atan(rayDir.y, rayDir.x);
-        // Cúpula celeste: a elevação usa as 3 componentes do raio (right =
-        // u_plane·ndcX, up = (horizon-row)/focal, forward = 1) em vez de só
-        // a linha da tela. Isso ancora o grid no MUNDO e restaura a curvatura
-        // de domo: as estrelas não achatam nas bordas nem parecem girar com a
-        // câmera (antes a elevação "1.0 - row/u_horizon" mudava junto com
-        // u_horizon ao olhar pra cima/baixo).
         float focal = max(u_scale * 0.5, 1.0);
         float ndcX = pixX / max(u_res.x * 0.5, 1.0) - 1.0;
         float rx = length(u_plane) * ndcX;
         float ry = (u_horizon - row) / focal;
         float elevSin = ry / sqrt(rx * rx + ry * ry + 1.0);
-
-        // Estrelas como PONTOS (não a célula cheia): a célula de azimute
-        // (1.43°) × sin-elevação (1/260) projeta como listra 12×1px perto do
-        // horizonte e quadrado 12×12 no alto. Aqui cada estrela é um disco de
-        // ~2-3px, redondo em qualquer direção (peso por eixo = px/célula).
-        // Verifica a vizinhança 3×3 para a estrela não sumir quando o
-        // fragmento está na borda da célula dela; o eixo do azimute usa mod
-        // canônico para a costura em ±180° não "comer" estrelas.
         float azCells = 2.0 * 3.14159265 * 40.0;
         float fragX = mod(az * 40.0, azCells);
         vec2 fragCell = vec2(fragX, elevSin * u_starsCount);
@@ -1102,15 +890,12 @@ vec3 skyColor(float row, vec2 rayDir, float pixX) {
     }
     return base;
 }
-
 void main() {
     vec2 ndc = uv * 2.0 - 1.0;
     vec2 rayDir = u_dir + u_plane * ndc.x;
     if (dot(rayDir, rayDir) < 1e-6) rayDir = u_dir;
-
-    float row = (1.0 - uv.y) * u_res.y;   // 0 no topo da tela
+    float row = (1.0 - uv.y) * u_res.y;
     float horizon = u_horizon;
-
     vec2 mapPos = floor(u_pos);
     vec2 delta = abs(vec2(1.0, 1.0) / rayDir);
     vec2 sideDist;
@@ -1119,7 +904,6 @@ void main() {
     else                { step.x =  1; sideDist.x = (mapPos.x + 1.0 - u_pos.x) * delta.x; }
     if (rayDir.y < 0.0) { step.y = -1; sideDist.y = (u_pos.y - mapPos.y) * delta.y; }
     else                { step.y =  1; sideDist.y = (mapPos.y + 1.0 - u_pos.y) * delta.y; }
-
     int wtype = 0;
     int side = 0;
     bool hit = false;
@@ -1133,61 +917,35 @@ void main() {
         if (t >= 1 && t <= int(u_wallMax)) { hit = true; wtype = t; }
         it++;
     }
-
     vec3 color;
     if (hit) {
         float perpDist = (side == 0) ? (sideDist.x - delta.x) : (sideDist.y - delta.y);
         vec3 wcol = (side == 1) ? palColor(float(wtype), 1) : palColor(float(wtype), 0);
-        // amostra a luz na célula ABERTA vizinha (do lado de onde o raio
-        // veio), não dentro da própria célula da parede. A coordenada
-        // tangencial (ao longo da face) continua vindo do ponto exato de
-        // impacto, o que preserva o gradiente de luz ao longo da parede.
-        // Já a coordenada perpendicular à face é fixada no centro do texel
-        // da célula aberta — assim a amostra nunca mistura (via filtro
-        // LINEAR) com o valor "morto"/ambiente da própria parede, que era
-        // o que fazia as quinas parecerem mais brilhantes que o centro da
-        // face.
         vec2 hitWorld = u_pos + perpDist * rayDir;
         vec2 faceNormal = (side == 0) ? vec2(-float(step.x), 0.0) : vec2(0.0, -float(step.y));
         vec2 wallSample = hitWorld + faceNormal * 0.5;
         wallSample = clamp(wallSample, vec2(0.02), u_mapSize - vec2(0.02));
         vec3 lightv = lightAt(wallSample);
         float fogv = clamp((u_fog * perpDist) / u_depth, 0.0, 1.0);
-        // coordenada U ao longo da face (tangencial), repete a cada 1 unidade
-        // de mapa — o clássico "fract" de raycaster pra texturizar paredes.
         float texU = fract((side == 0) ? hitWorld.y : hitWorld.x);
         float hasTexFlag = hasWallTex(float(wtype));
-
         float lineH = u_scale / perpDist;
         float wallTop = horizon - lineH * 0.5;
         float wallBottom = horizon + lineH * 0.5;
-
         if (row >= wallTop && row <= wallBottom) {
             float texV = clamp((row - wallTop) / max(1.0, wallBottom - wallTop), 0.0, 1.0);
-            
             vec3 wcolFinal;
             if (hasTexFlag > 0.5) {
-                // PAREDE COM TEXTURA:
-                // 1. Pega a textura e converte de sRGB para espaço linear
                 vec3 texColor = wallTexColor(float(wtype), vec2(texU, texV));
                 texColor = pow(texColor, vec3(2.2));
-                
-                // 2. Comprime a iluminação na textura (Tonemapping suave)
                 vec3 dynamicLight = lightv / (lightv + vec3(1.0));
                 vec3 litTex = texColor * dynamicLight * 2.2;
-                
-                // 3. Aplica o Gamma de volta para os olhos
                 wcolFinal = pow(litTex, vec3(1.0 / 2.2));
             } else {
-                // PAREDE DE COR SÓLIDA ([COLORS]):
-                // Usa a iluminação direta normal, sem distorcer o tom da cor HEX
                 vec3 dynamicLight = lightv / (lightv + vec3(1.0));
                 wcolFinal = wcol * dynamicLight * 1.5;
             }
-            
-            // Sombreamento 3D das quinas (N/S vs L/O)
             float sideShade = (side == 1) ? 0.8 : 1.0;
-            
             color = wcolFinal * sideShade * (1.0 - fogv);
         } else if (row > wallBottom) {
             float rowDist = (u_scale * 0.5) / (row - horizon);
@@ -1213,16 +971,7 @@ void main() {
             color = skyColor(row, rayDir, uv.x * u_res.x);
         }
     }
-
     vec2 pix = vec2(uv.x, 1.0 - uv.y) * u_res;
-
-    // ── billboards (Fase 5): sprites que sempre encaram a câmera ──
-    // Técnica clássica de sprite-casting: transforma a posição do
-    // billboard pro espaço da câmera usando a inversa da matriz
-    // [plane, dir] (mesma convenção 2D usada nos raycasters tipo
-    // Wolfenstein/Lodev). "ty" é a profundidade ao longo do raio da
-    // câmera — já corrigida contra o efeito "olho de peixe", assim como
-    // perpDist é pras paredes — e "tx" é o deslocamento lateral.
     {
         float wallDepth = hit ? ((side == 0) ? (sideDist.x - delta.x) : (sideDist.y - delta.y)) : 1e9;
         float invDet = 1.0 / (u_plane.x * u_dir.y - u_dir.x * u_plane.y);
@@ -1233,29 +982,18 @@ void main() {
             float tx = invDet * (u_dir.y * sp.x - u_dir.x * sp.y);
             float ty = invDet * (-u_plane.y * sp.x + u_plane.x * sp.y);
             if (ty <= 0.05 || ty >= wallDepth || ty >= bestDepth) continue;
-
             float screenX = (u_res.x * 0.5) * (1.0 + tx / ty);
-            float size = (u_scale / ty) * u_bbScale[b];   // sprite de 1 unidade de mundo (altura) × escala do .rcfg
+            float size = (u_scale / ty) * u_bbScale[b];
             float aspect = u_bbAspect[b];
-            float sizeX = size * aspect; // largura na tela segue a proporção original da imagem
+            float sizeX = size * aspect;
             float sizeY = size;
             float left = screenX - sizeX * 0.5;
             if (pix.x < left || pix.x > left + sizeX) continue;
-
-            // offset_y fixo + flutuar animado (amplitude/velocidade/fase) — item 3
-            // do PLANO.md; pra billboard estático (amplitude 0) fica igual a antes.
             float dynOff = u_bbYOff[b] + u_bbAmp[b] * sin(u_time * u_bbVel[b] + u_bbPhase[b]);
             float shift = dynOff * (u_scale / ty);
             float bottom = horizon + sizeY * 0.5 - shift;
             float top = bottom - sizeY;
             if (row < top || row > bottom) continue;
-
-            // A textura guarda a imagem com "contain" (proporção preservada,
-            // centralizada num quadro quadrado com padding transparente) —
-            // como o quad na tela já usa a proporção certa (sizeX/sizeY),
-            // a amostragem precisa focar só na região não-padding do
-            // quadro, senão o sprite fica menor dentro do próprio quad
-            // (Problema 4 do PLANO.md).
             float fx = min(1.0, aspect);
             float fy = min(1.0, 1.0 / aspect);
             float ux = (pix.x - left) / sizeX;
@@ -1263,7 +1001,6 @@ void main() {
             vec2 uvBB = vec2(ux * fx + (1.0 - fx) * 0.5, uy * fy + (1.0 - fy) * 0.5);
             vec4 s = texture(u_bbTex, vec3(uvBB, u_bbLayer[b]));
             if (s.a < 0.05) continue;
-
             bestDepth = ty;
             bestSample = s;
         }
@@ -1276,8 +1013,6 @@ void main() {
             color = mix(color, lit * (1.0 - fogv2), bestSample.a);
         }
     }
-
-    // crosshair (braços curtos, com vão no centro)
     vec2 ctr = u_res * 0.5;
     float ax = abs(pix.x - ctr.x);
     float ay = abs(pix.y - ctr.y);
@@ -1286,8 +1021,6 @@ void main() {
     if (onH || onV) {
         color = mix(color, u_cross, 0.8);
     }
-
-    // minimapa (canto sup-direito)
     vec2 mmPix = pix - u_mmPos;
     if (mmPix.x >= 0.0 && mmPix.x < u_mmSize.x && mmPix.y >= 0.0 && mmPix.y < u_mmSize.y) {
         vec2 cell = floor(mmPix / u_mmCell);
@@ -1302,13 +1035,9 @@ void main() {
             if (t >= 1 && t <= int(u_wallMax)) {
                 color = palColor(float(t), 1);
             } else if (fInvis) {
-                // faixas diagonais translúcidas — sinaliza sem parecer parede sólida
                 float stripe = fract((cellFrac.x + cellFrac.y) * 4.0);
                 color = mix(vec3(0.06), vec3(0.498, 0.690, 1.0), stripe < 0.5 ? 0.5 : 0.15);
             } else if (fLight) {
-                // círculo centralizado em vez de preenchimento sólido igual parede.
-                // bits 4-7 dos flags carregam o índice da luz (1-9) quando ela vem
-                // de LIGHT_CELLS (formato novo); 0 = formato legado, cai no `t`.
                 int lightIdx = (flags >> 4) & 15;
                 float tLight = (lightIdx > 0) ? (u_orbMin + float(lightIdx - 1)) : float(max(t, int(u_orbMin)));
                 vec3 lc = palColor(tLight, 1);
@@ -1317,7 +1046,6 @@ void main() {
                 color = vec3(0.06);
             }
             if (fBB) {
-                // losango laranja centralizado sinalizando billboard/partícula na célula
                 vec2 ac = abs(cellCenter);
                 if (ac.x + ac.y < 0.30) color = vec3(0.878, 0.643, 0.345);
             }
@@ -1329,34 +1057,18 @@ void main() {
         float dd = length(pix - u_dirPix);
         if (dd < 2.5) color = u_mmPlayer;
     }
-
     outColor = vec4(color, 1.0);
 }
 """
 
 
-# ══ TELA DE CARREGAMENTO (Fase 2) ════════════════════════════════
+# ══ TELA DE CARREGAMENTO (função) ════════════════════════════════
 def _make_progress_drawer(width, height, label):
-    # Desenha a barra de progresso NA PRÓPRIA janela OpenGL via moderngl,
-    # em vez de abrir uma janela 2D separada com pygame.display.set_mode().
-    #
-    # Por quê: set_mode() sem a flag OPENGL destrói a janela/contexto GL que
-    # já está de pé (init_display) e, quando a janela é recriada logo depois
-    # (resize_window), os objetos do moderngl (prog/vao) continuam apontando
-    # pro contexto morto — o resultado era tela preta ao carregar mapas
-    # grandes (≥ 4096 células, que é quando a barra aparece). Aqui o quadro
-    # é montado numa superfície 2D offscreen e enviado como textura pra um
-    # quad em tela cheia, então o contexto GL nunca é mexido.
-    #
-    # Usada como callback dentro de compute_light_grid().
     pygame.init()
     pygame.font.init()
     font = pygame.font.SysFont(None, 26)
 
     if ctx is None:
-        # Defensivo: sem contexto GL ainda (não acontece nos fluxos atuais,
-        # onde a barra só roda depois de init_display), cai pro comportamento
-        # antigo de janela 2D simples.
         screen = pygame.display.set_mode((max(320, width), max(120, height)))
         pygame.display.set_caption("Carregando mapa...")
 
@@ -1371,8 +1083,6 @@ def _make_progress_drawer(width, height, label):
             pygame.draw.rect(screen, (120, 120, 140), (bx, by, bar_w, bar_h), width=1, border_radius=6)
             txt = font.render(f"{label} — {int(pct * 100)}%", True, (230, 230, 230))
             screen.blit(txt, (bx, by - 32))
-            # processa a fila de eventos pra o SO não achar que o app travou
-            # (mensagem "não está respondendo") durante o cálculo pesado.
             pygame.event.pump()
             pygame.display.flip()
 
@@ -1430,9 +1140,6 @@ void main() {
         pygame.draw.rect(surf, (120, 120, 140), (bx, by, bar_w, bar_h), width=1, border_radius=6)
         txt = font.render(f"{label} — {int(pct * 100)}%", True, (230, 230, 230))
         surf.blit(txt, (bx, by - 32))
-        # o GL trata o eixo Y ao contrário do pygame: tobytes(flipped=True)
-        # já devolve as linhas de baixo pra cima (primeiro texel = canto
-        # inferior), que é a ordem que o quad espera em (0,0)=inferior.
         data = pygame.image.tobytes(surf, "RGBA", True)
         _ensure_gl()
         if quad_tex is not None:
@@ -1442,8 +1149,6 @@ void main() {
         prog_loading["u_tex"].value = 0
         ctx.viewport = (0, 0, sw, sh)
         vao_loading.render(mode=moderngl.TRIANGLES)
-        # processa a fila de eventos pra o SO não achar que o app travou
-        # (mensagem "não está respondendo") durante o cálculo pesado.
         pygame.event.pump()
         pygame.display.flip()
 
@@ -1453,16 +1158,6 @@ void main() {
 
 # ══ INICIALIZAÇÃO pygame + moderngl ═════════════════════════════
 def resize_window(width, height):
-    # Cria/recria a janela pygame no tamanho pedido E sincroniza o viewport
-    # do OpenGL/moderngl com esse mesmo tamanho.
-    #
-    # Bug corrigido aqui (Fase 1): antes, ao trocar de mapa pra um .rcfg com
-    # resolução diferente da janela original, o código só chamava
-    # pygame.display.set_mode(...) de novo — a janela do SO mudava de
-    # tamanho, mas o moderngl continuava desenhando no viewport antigo
-    # (o tamanho que existia quando o contexto foi criado, em init_display).
-    # O resultado eram bordas pretas: a GPU só pintava um retângulo do
-    # tamanho antigo dentro da janela nova, maior.
     pygame.display.set_mode((width, height), pygame.OPENGL | pygame.DOUBLEBUF)
     if ctx is not None:
         ctx.viewport = (0, 0, width, height)
@@ -1497,11 +1192,7 @@ def init_display():
     upload_textures()
 
 
-# Fixo em WALL_MAX_NOVO (9): o array de texturas sempre reserva o máximo
-# de camadas possível, já que o formato de mapa (legado x novo, Fase 4)
-# pode mudar de mapa pra mapa, mas o array da GPU precisa de um tamanho
-# fixo definido na inicialização.
-TEXTURE_LAYERS = WALL_MAX_NOVO  # 1 camada do array por tipo de parede (1..9)
+TEXTURE_LAYERS = WALL_MAX_NOVO
 
 
 def upload_textures():
@@ -1527,14 +1218,6 @@ def upload_textures():
     tex_map = ctx.texture((MAP_W, MAP_H), 1, map_data.tobytes(), dtype="f4")
     tex_map.filter = (moderngl.NEAREST, moderngl.NEAREST)
 
-    # ── flags por célula pro minimapa (Problema 7 do PLANO.md) ──
-    # bit 1 = barreira invisível, bit 2 = tem billboard, bit 4 = tem luz.
-    # Bits 4-7 = índice da luz (1-9), só preenchido quando ela vem de
-    # LIGHT_CELLS (formato novo, item 4) — como nesse formato a luz não
-    # mora mais no valor de grid, o shader não tem mais como descobrir a
-    # COR certa só olhando `t`; por isso o índice viaja embutido aqui.
-    # Formato legado (luz ainda codificada direto na grade) não precisa
-    # disso: bits 4-7 ficam em 0 e o shader cai no fallback `t >= ORB_MIN`.
     mm_flags = np.zeros((MAP_H, MAP_W), dtype=np.uint8)
     for y in range(MAP_H):
         for x in range(MAP_W):
@@ -1579,11 +1262,6 @@ def upload_textures():
     tex_palB = ctx.texture((256, 1), 4, palB.tobytes(), dtype="f4")
     tex_palB.filter = (moderngl.NEAREST, moderngl.NEAREST)
 
-    # ── texture array das paredes (Fase 2) ──
-    # Uma camada por tipo (1..TEXTURE_LAYERS). Tipos sem entrada em
-    # WALL_TEXTURES ficam com a camada vazia (preta/transparente) e o
-    # shader nem chega a usá-la: a máscara has_tex diz pra ele cair no
-    # fallback de cor sólida (palA/palB) pra esses tipos.
     tam = (TEXTURE_SIZE, TEXTURE_SIZE)
     camadas = np.zeros((TEXTURE_LAYERS, tam[1], tam[0], 4), dtype=np.uint8)
     has_tex = np.zeros((256, 1), dtype=np.float32)
@@ -1603,11 +1281,6 @@ def upload_textures():
     tex_hasTex = ctx.texture((256, 1), 1, has_tex.tobytes(), dtype="f4")
     tex_hasTex.filter = (moderngl.NEAREST, moderngl.NEAREST)
 
-    # ── texture array dos billboards (Fase 5) ──
-    # Cada instância de billboard no [MAP] (B1, B2, ...) referencia uma
-    # camada desse array pelo índice que já vem calculado em BILLBOARDS
-    # (ver upload de uniforms no loop principal). Sprites sem imagem
-    # (caminho inválido) caem no fallback xadrez magenta, igual às paredes.
     bb_camadas = np.zeros((BILLBOARD_LAYERS, tam[1], tam[0], 4), dtype=np.uint8)
     caminhos_billboards = sorted({caminho for (_, _, caminho, _, _, _, _, _) in BILLBOARDS})[:BILLBOARD_LAYERS]
     aspects_billboards = [1.0] * BILLBOARD_LAYERS
@@ -1619,13 +1292,6 @@ def upload_textures():
     tex_bbTex.filter = (moderngl.LINEAR, moderngl.LINEAR)
     tex_bbTex.repeat_x = False
     tex_bbTex.repeat_y = False
-    # Sem build_mipmaps() aqui de propósito (Problema 2 do PLANO.md):
-    # billboards não tileiam feito paredes, então minificação suave não
-    # compensa o risco de a GPU misturar RGB de texels opacos da borda com
-    # texels vizinhos totalmente transparentes ao gerar os mip levels —
-    # isso é o que causava a linha clara/escura contornando o sprite.
-    # guarda o mapeamento caminho -> índice de camada/aspect pra montar os
-    # uniforms de instância (posição/camada/offset/aspect) no loop principal.
     global _BB_LAYER_BY_PATH, _BB_ASPECT_BY_PATH
     _BB_LAYER_BY_PATH = {c: i for i, c in enumerate(caminhos_billboards)}
     _BB_ASPECT_BY_PATH = {c: aspects_billboards[i] for i, c in enumerate(caminhos_billboards)}
@@ -1674,8 +1340,6 @@ def load_map_file(caminho, preserve_position=False):
     SKY_PAUSED = False
     SPAWN = data["spawn"]
     if not preserve_position:
-        # hot-reload (fastloading, ver PLANO.md) pula este reset pra manter o
-        # jogador exatamente onde estava enquanto o .rcfg é editado ao vivo.
         px, py, pangle = SPAWN
         look_y = 0
     WALL_MAX = data["wall_max"]
@@ -1708,11 +1372,9 @@ def main():
         load_map_file(caminho)
         restore_saved_position(caminho)
 
-    # ── fastloading (PLANO.md item 4): observa o .rcfg em disco e recarrega
-    # sozinho quando o editor salva, sem resetar o jogador pro SPAWN. ──
     hot_reload_last_check = time_sec()
-    hot_reload_seen_stamp = None   # (mtime, size) já carregado/tentado com sucesso
-    hot_reload_pending_stamp = None  # (mtime, size) visto na checagem anterior, aguardando confirmação de estabilidade
+    hot_reload_seen_stamp = None
+    hot_reload_pending_stamp = None
     if caminho:
         try:
             st = os.stat(caminho)
@@ -1739,11 +1401,9 @@ def main():
         dt = clock.tick(FPS_CAP) / 1000.0
         dt = max(0.0, min(0.1, dt))
 
-        # ── ciclo dia-noite (PLANO.md item 2) ──
         if SKY["enabled"] and SKY["cycle"] and not SKY_PAUSED:
             SKY_TIME = (SKY_TIME + dt * (24.0 / SKY["day_length"])) % 24.0
 
-        # ── fastloading: checa o arquivo a cada ~0.5s (não a cada frame) ──
         if caminho is not None:
             now_check = time_sec()
             if now_check - hot_reload_last_check >= 0.5:
@@ -1755,8 +1415,6 @@ def main():
                     stamp = None
                 if stamp is not None and stamp != hot_reload_seen_stamp:
                     if stamp == hot_reload_pending_stamp:
-                        # mesmo tamanho/mtime em duas checagens seguidas: o save
-                        # do editor já terminou de escrever, é seguro recarregar.
                         hot_reload_seen_stamp = stamp
                         hot_reload_pending_stamp = None
                         try:
@@ -1799,8 +1457,8 @@ def main():
                     pygame.mouse.get_rel()
                 elif e.key == pygame.K_r:
                     if caminho is not None:
-                        load_map_file(caminho)  # já deixa px,py,pangle,look_y no SPAWN do arquivo
-                        save_current_position(caminho)  # sobrescreve o cache com o reset
+                        load_map_file(caminho)
+                        save_current_position(caminho)
                         hot_reload_pending_stamp = None
                         try:
                             st = os.stat(caminho)
@@ -1848,12 +1506,6 @@ def main():
             px, py, pangle = SPAWN
             look_y = 0
 
-        # ── uniforms ──
-        # plane_len é multiplicado pelo aspect ratio (largura/altura) da
-        # janela (Fase 1: bug relacionado ao das bordas pretas). Sem isso,
-        # o FOV horizontal configurado no .rcfg só ficava correto numa
-        # proporção de tela específica; em janelas bem largas ou bem
-        # estreitas a imagem saía "esticada"/com FOV horizontal errado.
         aspect = (WIDTH / HEIGHT) if HEIGHT else 1.0
         plane_len = math.tan(FOV / 2) * aspect
         plane_x = -math.sin(pangle) * plane_len
@@ -1871,18 +1523,7 @@ def main():
         prog["u_wallMax"].value = float(WALL_MAX)
         prog["u_orbMin"].value = float(ORB_MIN)
 
-        # Azimute do sol: meio-dia aponta para +X, a frente do jogador na carga
-        # (pangle=0). Assim o arco passa por cima À frente da câmera — o sol sobe
-        # pela esquerda, cruza o topo no meio-dia e desce pela direita. Antes o
-        # azimute era (SKY_TIME/24·2π), que punha o meio-dia em -X (atrás), e o
-        # sol só ficava na frente durante a noite, abaixo do horizonte.
         sun_angle = ((SKY_TIME - 12.0) / 24.0) * 2.0 * math.pi
-        # Fase corrigida do ciclo solar: 6h amanhece (sin=0), 12h meio-dia no
-        # zênite (sin=1), 18h entardecer (sin=0), meia-noite embaixo (sin=-1).
-        # O pico é escalado por sun_peak (graus de elevação máxima). O day_factor
-        # é normalizado por sin(sun_peak): o meio-dia (sun_elev = sin(sun_peak))
-        # vira 1.0 sempre, então baixar o pico para caber o arco no viewport não
-        # escurece o meio-dia.
         sun_time_angle = ((SKY_TIME - 6.0) / 24.0) * 2.0 * math.pi
         sun_elev = math.sin(sun_time_angle) * math.sin(math.radians(SKY["sun_peak"]))
         day_factor = max(0.0, min(1.0, sun_elev / max(math.sin(math.radians(SKY["sun_peak"])), 1e-4))) if SKY["enabled"] else 1.0
@@ -1918,7 +1559,6 @@ def main():
         mm_h = MAP_H * mm_cell
         mm_x = WIDTH - mm_w - 10
         mm_y = 10
-        # ── billboards + partículas (Fase 5 / PLANO.md item 3): arrays de instância pro shader ──
         bb_instances = BILLBOARDS[:MAX_BILLBOARD_INSTANCES]
         bb_pos = [(0.0, 0.0)] * MAX_BILLBOARD_INSTANCES
         bb_layer = [0.0] * MAX_BILLBOARD_INSTANCES
@@ -1952,10 +1592,6 @@ def main():
         prog["u_mmSize"].value = (mm_w, mm_h)
         prog["u_mmCell"].value = float(mm_cell)
         prog["u_playerPix"].value = (mm_x + px * mm_cell, mm_y + py * mm_cell)
-        # distância (em células) entre o ponto do player e a ponta do ponteiro de
-        # direção no minimapa — reduzida pra ficarem mais próximos, com piso de
-        # segurança pra não sobrepor os dois círculos (r=3.5px + r=2.5px=6px) em
-        # mapas grandes onde mm_cell fica pequeno.
         mm_dir_dist = max(0.9, 6.0 / mm_cell)
         prog["u_dirPix"].value = (mm_x + (px + math.cos(pangle) * mm_dir_dist) * mm_cell,
                                   mm_y + (py + math.sin(pangle) * mm_dir_dist) * mm_cell)
