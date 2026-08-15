@@ -42,7 +42,7 @@ AUTHOR Nathan
 2 #6bd9ff 5
 
 [TEXTURES]
-3 mapas/garden/sprites/garden.png
+3 sprites/garden.png
 
 [THEME]
 SKY_BASE #1a1a4a
@@ -67,22 +67,22 @@ STARS 260
 🌌 Showcase — Céu & Partículas
 
 [BILLBOARDS]
-1 demos/billboards/sprites/vaso_planta.png 0 1
-2 demos/billboards/sprites/orbe_flutuante.png 0.9 1
+1 sprites/vaso_planta.png 0 1
+2 sprites/orbe_flutuante.png 0.9 1
 
 [PARTICLES]
-1 demos/billboards/sprites/orbe_flutuante.png 8 0.6 4
+1 sprites/orbe_flutuante.png 8 0.6 4
 
 [MAP]
 1 1 1 1 1 1 1 1 1 1 1 1
-1 0 0 L1 0 0 0 0 0 0 0 1
+1 0 0 0+L1 0 0 0 0 0 0 0 1
 1 0 0 0 0 0 0 0 0 3 0 1
 1 0 0 0 0 0 0 0 0 0 0 1
 1 0 0 0 0 0 0 0 0 0 0 1
 1 0 0 0 0 0 0 0 0 0 0 1
-1 0 0 0 0 B2 0 0 0 0 0 1
-1 0 0 0 0 0 0 P1 P1 0 0 1
+1 0 0 0 0 0+B2 0 0 0 0 0 1
+1 0 0 0 0 0 0 0+P1 0+P1 0 0 1
 1 0 0 0 0 0 0 0 0 0 0 1
 1 0 0 3 0 0 0 0 0 0 0 1
-1 0 0 L2 0 0 0 0 0 0 0 1
+1 0 0 0+L2 0 0 0 0 0 0 0 1
 1 1 1 1 1 1 1 1 1 1 1 1

@@ -1,8 +1,10 @@
 # Raycasting FP Engine (Edição GPU)
 
-Engine de renderização pseudo-3D inspirada no estilo clássico de *Wolfenstein 3D*, mas executada **diretamente no Fragment Shader (GPU)** usando Pygame, ModernGL e OpenGL (GLSL 330) — em vez do raycasting tradicional feito coluna por coluna na CPU.
+Uma engine de renderização pseudo-3D no estilo *Wolfenstein 3D*, mas que faz o raycasting inteiro **no fragment shader (GPU)**, usando Pygame, ModernGL e OpenGL 3.3. Em vez de calcular cada coluna da tela na CPU, cada pixel é decidido na placa de vídeo.
 
-O diferencial é o sistema de iluminação dinâmica: luzes seguem a lei do inverso do quadrado, projetam sombras suavizadas (penumbra) e ainda reemitem luz indiretamente nas paredes vizinhas (GI/Bounce), tudo calculado previamente assim que o .rcfg é carregado.
+A iluminação é dinâmica: as luzes seguem a lei do inverso do quadrado, projetam sombras com penumbra suave e reemitem luz nas paredes vizinhas (GI/bounce), tudo pré-calculado no momento em que o mapa `.rcfg` é carregado.
+
+Este README é um **guia de uso**: como rodar, como montar seu primeiro mapa do zero e a referência completa do formato `.rcfg`.
 
 ![status](https://img.shields.io/badge/status-em%20desenvolvimento-yellow)
 ![python](https://img.shields.io/badge/python-3.8%2B-blue)
@@ -20,68 +22,11 @@ O diferencial é o sistema de iluminação dinâmica: luzes seguem a lei do inve
 
 ---
 
-## ✨ Principais recursos
-
-- Renderização por pixel no fragment shader (GPU real, não CPU)
-- Iluminação dinâmica com queda de intensidade por inverso do quadrado
-- Sombras com penumbra suave (soft shadows)
-- Global Illumination simplificada (bounce de luz nas paredes)
-- Billboards: sprites 2D sempre de frente pra câmera, com oclusão por profundidade (Fase 5)
-- Texturas em sRGB com correção de gamma automática, com fallback para cor sólida
-- Ciclo de dia e noite opcional, com sol, lua e estrelas (seção `[SKY]`)
-- Sistema de partículas animadas (flutuando/orbitando), além dos billboards estáticos
-- Formato de mapa próprio (`.rcfg`), simples de editar em qualquer editor de texto
-- Editor visual de mapas (`editor.html`), rodando direto no navegador
-- Drag & drop de arquivos `.rcfg` direto na janela do jogo, para trocar de mapa sem reiniciar
-- Hot-reload: o mapa carregado recarrega sozinho ao ser salvo/editado no disco, e a posição do jogador é preservada
-
----
-
-## 📁 Estrutura do projeto
-
-```
-RAYCASTING-ENGINE/
-├── Raycasting.pyw        # arquivo principal — execute este
-├── requirements.txt
-├── editor.html           # editor visual de mapas .rcfg (abre no navegador)
-├── showcase.rcfg         # mapa de demonstração (céu dinâmico + partículas)
-├── LICENSE
-├── README.md
-├── demos/                # demos em formato .rcfg
-│   ├── billboards/
-│   │   ├── demo_billboards.rcfg
-│   │   └── sprites/
-│   │       ├── orbe_flutuante.png
-│   │       └── vaso_planta.png
-│   ├── festa_colorida.rcfg
-│   ├── graphics/
-│   │   ├── Global Illumination.rcfg
-│   │   └── Shader.rcfg
-│   └── waifu_billboard/
-│       ├── waifu_billboard.rcfg
-│       └── sprites/
-│           ├── folder.png
-│           ├── waifu.jpg
-│           └── youtube.webp
-└── mapas/                # mapas de exemplo em formato .rcfg
-    ├── backrooms/
-    │   ├── backrooms.rcfg
-    │   └── sprites/
-    │       └── wall.jpg
-    └── garden/
-        ├── garden.rcfg
-        └── sprites/
-            ├── garden.png
-            └── grass.webp
-```
-
----
-
 ## ⚡ Como executar
 
 ### Pré-requisitos
 - Python 3.8+
-- Placa de vídeo compatível com OpenGL 3.3+
+- Placa de vídeo com OpenGL 3.3+
 
 ### Instalação
 
@@ -93,45 +38,335 @@ pip install -r requirements.txt
 
 ### Executando
 
-Com o mapa padrão interno da engine:
+Sem argumentos, a engine abre com um mapa de demonstração embutido:
 
 ```bash
 python Raycasting.pyw
 ```
 
-Carregando um mapa específico `.rcfg` diretamente:
+Passando o caminho de um `.rcfg`, esse mapa é carregado na inicialização:
 
 ```bash
-python Raycasting.pyw mapas/backrooms/backrooms.rcfg
+python Raycasting.pyw mapas/garden/garden.rcfg
 ```
 
-> **Dica:** com o jogo já em execução, arraste e solte qualquer arquivo `.rcfg` dentro da janela para trocar de mapa instantaneamente, sem precisar reiniciar. Além disso, o mapa **atualmente carregado** tem hot-reload: se você editar e salvar o `.rcfg` no disco, o jogo detecta a mudança e recarrega sozinho, preservando a posição do jogador.
+**Durante a execução:**
 
-### Editor visual de mapas
+- **Arraste e solte** qualquer arquivo `.rcfg` dentro da janela para trocar de mapa na hora, sem reiniciar.
+- O mapa **atualmente carregado** tem hot-reload: edite e salve o `.rcfg` no disco e o jogo recarrega sozinho, mantendo a posição da câmera.
 
-O repositório inclui `editor.html`, um editor de mapas `.rcfg` que roda direto no navegador (sem servidor). Basta abrir o arquivo localmente para montar o grid, configurar texturas/luzes/céu e exportar o `.rcfg`.
-
----
-
-## ⌨️ Controles
+### Controles
 
 | Tecla | Ação |
 | :--- | :--- |
 | `W` `A` `S` `D` ou setas | Movimentação |
 | `Shift` | Correr |
 | `Mouse` | Rotacionar câmera / olhar para cima e para baixo |
-| `Esc` | Alternar captura do mouse (travar/destravar cursor) |
-| `R` | Resetar posição do jogador para o `SPAWN` original do mapa |
-| `,` / `.` | Retroceder / avançar o horário do céu (30 min por toque) |
+| `Esc` | Travar/destravar o cursor do mouse |
+| `R` | Voltar para o `SPAWN` original do mapa |
+| `,` / `.` | Recuar / avançar o horário do céu (30 min por toque) |
 | `P` | Pausar / retomar o ciclo de dia e noite |
 
 ---
 
-## 🛠️ Criando seus próprios mapas (`.rcfg`)
+## 🧱 Construindo seu primeiro mapa
 
-Mapas são arquivos de texto simples. O `.rcfg` deve ficar na mesma pasta das texturas que ele referencia (ou usar caminhos relativos corretos a partir do local do arquivo).
+Um mapa é um arquivo de texto com extensão `.rcfg`. Ele tem seções (entre `[COLCHETES]`) e uma grade de células em `[MAP]`. Siga o passo a passo abaixo — cada bloco é uma seção real que a engine entende.
 
-### Exemplo mínimo
+> **Regra de ouro dos caminhos:** a engine resolve os caminhos de imagens **relativos à pasta do próprio `.rcfg`**. Coloque as imagens numa subpasta `sprites/` ao lado do arquivo, como fazem os exemplos em [`demos/`](./demos) e [`mapas/`](./mapas).
+
+### 1. Esqueleto do arquivo
+
+```ini
+[TITLE]
+Meu Primeiro Corredor
+
+[CONFIG]
+window 960 560
+fov 60
+ambient 0.08
+
+[SPAWN]
+x 2.5
+y 2.5
+angle 0
+```
+
+- `[TITLE]`: texto da janela do jogo.
+- `[CONFIG]`: opções de qualidade/controle (veja a [tabela completa](#config--opções-globais)). Tudo aqui é opcional — o que você não escrever usa o padrão.
+- `[SPAWN]`: onde o jogador nasce (`x`, `y` no grid; `angle` em graus). Se o ponto cair dentro de uma parede, a engine move o jogador sozinha para a primeira célula vazia.
+
+### 2. O layout com `[MAP]`
+
+A grade é uma matriz de tokens separados por espaço, vírgula ou ponto e vírgula. As paredes do contorno fecham o mapa:
+
+```ini
+[MAP]
+1 1 1 1 1
+1 0 0 0 1
+1 0 0 0 1
+1 0 0 0 1
+1 1 1 1 1
+```
+
+### 3. Cores ou texturas das paredes
+
+As paredes `1` a `9` são definidas em `[TEXTURES]` (imagens) ou, na ausência delas, em `[COLORS]`:
+
+```ini
+[COLORS]
+1 #8a7a63 #5c5041
+```
+
+Cada linha é `ID cor_faces_norte_sul cor_faces_leste_oeste` — as duas cores dão profundidade aos dois lados do cubo.
+
+Para textura em vez de cor, use `[TEXTURES]` (a imagem entra em espaço sRGB, com correção de gamma no shader):
+
+```ini
+[TEXTURES]
+1 sprites/tijolo.png
+```
+
+Um tipo de parede pode estar só em `[TEXTURES]`, só em `[COLORS]`, ou nos dois (textura com cor de reserva).
+
+### 4. Luzes
+
+Primeiro define-se a luz em `[LIGHTS]`, depois espalha-se `L#` pelas células do mapa:
+
+```ini
+[LIGHTS]
+1 #ffb36b 5.5
+```
+
+```ini
+[MAP]
+1 1 1 1 1
+1 0+L1 0 0 1
+1 0 0 0+L1 1
+1 0 0 0 1
+1 1 1 1 1
+```
+
+Cada linha de `[LIGHTS]` é `ID cor_hex raio`. O token `0+L1` significa: **célula vazia (`0`) mais (`+`) a luz `L1` sobre ela**. Tochas, velas e lustres são feitos assim.
+
+### 5. Billboards (sprites sempre de frente)
+
+Sprites 2D que sempre encaram a câmera e recebem oclusão correta das paredes. Definem-se em `[BILLBOARDS]` e usam tokens `B#`:
+
+```ini
+[BILLBOARDS]
+1 sprites/vaso_planta.png 0
+2 sprites/orbe_flutuante.png 0.9 1.5
+```
+
+```ini
+[MAP]
+1 1 1 1 1
+1 0 0 0 1
+1 0+B2 0 0 1
+1 0+B1 0 0 1
+1 1 1 1 1
+```
+
+Sintaxe: `ID caminho offset_y [escala]`. `offset_y` eleva o sprite em relação ao chão (unidades de mundo; `0` = encostado, valores maiores = flutuando). `escala` (padrão `1.0`) multiplica o tamanho — por padrão o sprite ocupa 1 unidade de altura. Cada célula com `B#` é atravessável.
+
+### 6. Partículas (sprites animados)
+
+Igual a billboard, mas gera várias instâncias flutuando e girando ao redor da célula. Definem-se em `[PARTICLES]` com tokens `P#`:
+
+```ini
+[PARTICLES]
+1 sprites/orbe_flutuante.png 8 0.6 4
+```
+
+```ini
+[MAP]
+1 1 1 1 1
+1 0 0 0 1
+1 0+P1 0 0 1
+1 0 0 0 1
+1 1 1 1 1
+```
+
+Sintaxe: `ID caminho quantidade velocidade espalhamento`.
+
+### 7. Céu dinâmico (opcional)
+
+Sem `[SKY]`, o céu é o gradiente estático do `[THEME]`. Com ele, a engine desenha sol, lua e estrelas e pode animar a passagem do tempo:
+
+```ini
+[SKY]
+cycle true
+day_length 120
+start_time 8
+sun_color #fff2c0
+moon_color #b9c6e0
+stars 140
+```
+
+Veja a [tabela completa](#sky--ciclo-de-dia-e-noite).
+
+### 8. Teste e itere
+
+```bash
+python Raycasting.pyw caminho/do/meu_mapa.rcfg
+```
+
+Troque valores, salve e observe o hot-reload. Quando quiser editar visualmente (grid, cores, céu), abra o [`editor.html`](#editor-visual-de-mapas).
+
+---
+
+## 📖 Referência do formato `.rcfg`
+
+### Regras gerais
+
+- Comentários: linhas que **começam com `#`**, ou `#` no fim da linha (`1 #ff0000 #880000  # parede vermelha`).
+- Chaves e valores não diferenciam maiúsculas/minúsculas.
+- A ordem das seções não importa para a engine (o editor as reordena ao salvar).
+- Toda célula fora do alcance do `SPAWN`/das paredes é tratada como bloqueada pela engine.
+
+### `[MAP]` — a grade do nível
+
+Cada token de uma célula é `base+extra`. A **base** é o que ocupa a célula (parede ou vazio); os **extras** (uma ou mais camadas `L#`, `B#`, `P#`) ficam **sobre** ela, separados por `+`. Vale no máximo um `L`, um `B` e um `P` por célula.
+
+| Token | O que faz |
+| :--- | :--- |
+| `0` | Chão vazio, percorrível |
+| `1` a `9` | Parede dos tipos `1`..`9` (definidos em `[TEXTURES]`/`[COLORS]`) |
+| `N` | **Parede invisível**: bloqueia o jogador mas não é desenhada nem aparece no minimapa (sem cor/textura) — útil para confinar sem fechar a visão |
+| `0+L1` | Célula vazia com a luz `1` no centro |
+| `1+B2` | Parede do tipo `1` com um billboard `2` na célula |
+| `0+P3` | Célula vazia com as partículas `3` |
+| `0+L1+B2+P3` | As três camadas juntas na mesma célula |
+
+**Retrocompatibilidade** (a engine continua aceitando mapas antigos):
+
+- `L1`, `B1`, `P1` **sem base** são interpretados como `0+L1`, `0+B1`, `0+P1`.
+- Formatos 100% antigos, só com dígitos: `1` a `6` = parede e `7` ou mais = luz (`L1` equivale ao antigo `7`, `L2` ao `8`...). Nesse caso `7`, `8`, `9` **não** são paredes — por isso os mapas novos devem usar `L#`/`B#`/`P#`.
+
+> **Na prática:** escreva sempre os tokens compostos (`0+L1` em vez de `L1`). É o formato atual e evita ambiguidade entre "parede 7" e "luz 1".
+
+### `[CONFIG]` — opções globais
+
+| Chave | Padrão | Descrição |
+| :--- | :--- | :--- |
+| `window` | `960 560` | Resolução da janela (`largura altura`) |
+| `mm` | `140` | Tamanho da janela do minimapa em pixels |
+| `fov` | `60` | Campo de visão da câmera, em graus |
+| `num_rays` | `200` | Raios por coluna da tela (detalhe vertical) |
+| `max_depth` | `30` | Alcance máximo dos raios, em blocos |
+| `move_speed` | `0.06` | Velocidade de caminhada por frame |
+| `run_multiplier` | `1.8` | Multiplicador ao correr (`Shift`) |
+| `mouse_sens_x` | `0.004` | Sensibilidade horizontal do mouse |
+| `mouse_sens_y` | `1.0` | Sensibilidade vertical do mouse |
+| `max_look_y` | `240` | Ângulo máximo de olhar para cima/baixo |
+| `fog` | `1.4` | Intensidade da névoa por distância (maior = mais densa) |
+| `gradient_steps` | `14` | Faixas do gradiente do céu |
+| `ambient` | `0.07` | Luz ambiente global (`0.0` a `1.0`) |
+| `floor_bands` | `3` | Faixas do gradiente do chão |
+| `floor_step` | `2` | Escurecimento entre as faixas do chão |
+| `light_res` | `1` | Subdivisão da grade de luz por bloco (`1, 2, 4, 8, 16, 32`). Maior = gradientes mais precisos, mais custo. Valores fora da lista são ajustados para o mais próximo |
+| `light_soft_samples` | `6` | Amostras da penumbra das sombras |
+| `light_soft_radius` | `0.4` | Raio de espalhamento da penumbra |
+| `light_bounce` | `0.35` | Intensidade do rebote de luz nas paredes (GI) |
+| `light_bounce_radius` | `1.6` | Raio de alcance do rebote |
+| `light_bounce_passes` | `2` | Passes do rebote de luz |
+| `texture_size` | `256` | Tamanho de redimensionamento das texturas importadas |
+| `wall_scale` | `1.0` | Altura das paredes: `1.0` = proporcionais, `> 1` = mais finas e altas, `< 1` = mais grossas e baixas |
+
+### `[SPAWN]` — posição inicial
+
+- `x`, `y`: posição no grid (centro da célula = `n.5`)
+- `angle`: direção inicial da câmera em graus (`0` a `360`)
+
+Se o ponto cair em parede, a engine realoca o jogador para a primeira célula vazia do mapa.
+
+### `[INFO]` — metadados
+
+Chaves livres, exibidas no HUD:
+
+```
+NAME Meu Mapa
+AUTHOR Fulano
+```
+
+### `[THEME]` — cores da interface e do ambiente
+
+Todas aceitam um hex (`#rrggbb`):
+
+```
+SKY_BASE #1a1a3a       # topo do céu (mais escuro)
+SKY_TOP #4a3b6e        # base do céu (horizonte)
+FLOOR_BASE #1e1e24     # chão perto do horizonte
+FLOOR_TOP #3a3a4d      # chão perto da câmera
+CROSSHAIR #00ffff      # retículo central
+HUD_LIGHT #00ffcc      # cor de luz no HUD
+HUD_ALERT #ffcc00      # alertas no HUD
+MINIMAP_PLAYER #00ffff # jogador no minimapa
+```
+
+### `[COLORS]` — paredes sem textura
+
+Sintaxe: `ID COR_FACES_NORTE_SUL COR_FACES_LESTE_OESTE`
+
+```
+1 #888888 #555555
+```
+
+### `[TEXTURES]` — paredes texturizadas
+
+Sintaxe: `ID caminho/relativo/imagem.png` (relativo à pasta do `.rcfg`)
+
+```
+1 texturas/tijolo.png
+```
+
+Se a imagem não existir, a engine usa um **xadrez magenta/preto** (textura de erro) em vez de travar — você vê na hora qual caminho está errado.
+
+### `[LIGHTS]` — fontes de luz
+
+Sintaxe: `ID COR_HEX RAIO` (índices `1` a `9`, usados como `L1`..`L9` no `[MAP]`)
+
+```
+1 #ff8800 6.0
+```
+
+### `[SKY]` — ciclo de dia e noite (opcional)
+
+| Chave | Padrão | Descrição |
+| :--- | :--- | :--- |
+| `cycle` | `false` | Se `true`, o horário avança sozinho durante o jogo |
+| `day_length` | `120` | Duração de um dia completo, em segundos reais |
+| `start_time` | `8` | Horário inicial do "dia de jogo" (`0` a `24`) |
+| `sun_peak` | `45` | Elevação máxima do sol ao meio-dia (`10` a `90`; `45` mantém o arco visível na tela, `90` = zênite) |
+| `sun_color` | `#fff2c0` | Cor do sol |
+| `moon_color` | `#b9c6e0` | Cor da lua |
+| `stars` | `0` | Quantidade de estrelas à noite |
+
+O horário também se controla em tempo real com `,` `.` e `P`.
+
+### `[BILLBOARDS]` — sprites sempre de frente pra câmera
+
+Sintaxe: `ID caminho/relativo/imagem.png offset_y [escala]` (índices `1` a `9`, usados como `B1`..`B9`)
+
+```
+1 sprites/vaso_planta.png 0.0
+2 sprites/orbe_flutuante.png 0.9 1.5
+```
+
+`offset_y` é a elevação em blocos em relação ao chão (`0.0` = no chão; valores maiores = flutuando). `escala` (padrão `1.0`) multiplica o sprite, que ocupa 1 unidade de altura. Cada célula com `B#` é atravessável e sempre encara a câmera, com oclusão correta contra as paredes.
+
+### `[PARTICLES]` — sprites animados (flutuando)
+
+Sintaxe: `ID caminho/relativo/imagem.png quantidade velocidade espalhamento` (índices `1` a `9`, usados como `P1`..`P9`)
+
+```
+1 sprites/orbe_flutuante.png 8 0.6 4
+```
+
+`quantidade` (padrão `8`) = instâncias por célula, `velocidade` (padrão `0.5`) = rapidez do movimento, `espalhamento` (padrão `0.4`) = raio de dispersão ao redor do ponto central. O flutuar vertical é animado automaticamente.
+
+### Exemplo mínimo completo
 
 ```ini
 [TITLE]
@@ -162,177 +397,88 @@ angle 0
 
 [MAP]
 1 1 1 1 1
-1 0 0 L1 1
+1 0 0 0+L1 1
 1 0 2 0 1
 1 0 0 0 1
 1 1 1 1 1
 ```
 
-### Referência das seções
-
-#### `[CONFIG]` — opções globais
-
-| Chave | Padrão | Descrição |
-| :--- | :--- | :--- |
-| `window` | `960 560` | Resolução da janela (`largura altura`) |
-| `mm` | `140` | Tamanho da janela do minimapa em pixels |
-| `fov` | `60` | Campo de visão da câmera, em graus |
-| `num_rays` | `180` | Número de raios por coluna da tela |
-| `max_depth` | `30` | Alcance máximo dos raios, em blocos |
-| `move_speed` | `0.06` | Velocidade de caminhada por frame |
-| `run_multiplier` | `1.8` | Multiplicador de velocidade ao correr (`Shift`) |
-| `mouse_sens_x` | `0.004` | Sensibilidade horizontal do mouse |
-| `mouse_sens_y` | `1.0` | Sensibilidade vertical do mouse |
-| `max_look_y` | `240` | Ângulo máximo de olhar para cima/baixo |
-| `fog` | `1.4` | Intensidade da névoa por distância |
-| `gradient_steps` | `14` | Número de faixas do gradiente de céu |
-| `ambient` | `0.07` | Intensidade da luz ambiente global (`0.0` a `1.0`) |
-| `floor_bands` | `4` | Número de faixas do gradiente de chão |
-| `floor_step` | `2` | Progressão de escurecimento entre as faixas do chão |
-| `light_res` | `1` | Subdivisão da grade de luz por bloco (`1, 2, 4, 8, 16, 32`); valores maiores dão gradientes de luz mais precisos, com custo de performance |
-| `light_soft_samples` | `6` | Número de amostras usadas na penumbra das sombras |
-| `light_soft_radius` | `0.4` | Raio de espalhamento da penumbra |
-| `light_bounce` | `0.35` | Intensidade do rebote de luz nas paredes (GI) |
-| `light_bounce_radius` | `1.6` | Raio de alcance do rebote de luz |
-| `light_bounce_passes` | `2` | Número de passes do rebote de luz |
-| `texture_size` | `256` | Tamanho de redimensionamento padrão das texturas importadas |
-| `wall_scale` | `1.0` | Fator de altura das paredes: `1.0` = quadradas/proporcionais, `> 1` = mais finas e altas, `< 1` = mais grossas e baixas |
-
-#### `[SPAWN]` — posição inicial
-
-- `x`, `y`: posição no grid do mapa
-- `angle`: ângulo inicial da câmera, em graus (`0` a `360`)
-
-#### `[TITLE]` — título mostrado na janela do jogo
-
-Texto puro na linha, sem chave:
-
-```
-[TITLE]
-🔮 O TEMPLO DOS CRISTAIS DE LUZ
-```
-
-#### `[INFO]` — metadados do mapa
-
-Chaves livres, exibidas no HUD/info:
-
-```
-NAME Meu Mapa
-AUTHOR Fulano
-```
-
-#### `[THEME]` — cores da interface e do ambiente
-
-Todas as chaves aceitam um hex (`#rrggbb`):
-
-```
-SKY_BASE #1a1a3a       # topo do céu (mais escuro)
-SKY_TOP #4a3b6e        # base do céu (no horizonte)
-FLOOR_BASE #1e1e24     # chão perto do horizonte
-FLOOR_TOP #3a3a4d      # chão perto da câmera
-CROSSHAIR #00ffff      # retículo central
-HUD_LIGHT #00ffcc      # cor de luz no HUD
-HUD_ALERT #ffcc00      # alertas no HUD
-MINIMAP_PLAYER #00ffff # jogador no minimapa
-```
-
-#### `[COLORS]` — paredes sem textura
-
-Sintaxe: `ID COR_FACES_NORTE_SUL COR_FACES_LESTE_OESTE`
-
-```
-1 #888888 #555555
-```
-
-#### `[TEXTURES]` — paredes texturizadas
-
-Sintaxe: `ID caminho/relativo/imagem.png`
-
-```
-1 texturas/tijolo.png
-```
-
-A imagem é tratada em espaço de cor sRGB, com correção de gamma 2.2 aplicada automaticamente no shader.
-
-#### `[LIGHTS]` — fontes de luz
-
-Sintaxe: `ID COR_HEX RAIO`
-
-```
-1 #ff8800 6.0
-```
-Tocha com luz alaranjada e alcance de 6 blocos. No formato novo, o `ID` de `1` a `9` corresponde aos tokens `L1`..`L9` usados na grade do `[MAP]`.
-
-#### `[SKY]` — ciclo de dia e noite (opcional)
-
-Sem essa seção, o céu permanece estático, só com o gradiente do `[THEME]`. Com ela, a engine desenha sol, lua e estrelas, e pode animar a passagem do tempo:
-
-```ini
-[SKY]
-cycle true
-day_length 120
-start_time 8
-sun_color #fff2c0
-moon_color #b9c6e0
-stars 140
-```
-
-| Chave | Padrão | Descrição |
-| :--- | :--- | :--- |
-| `cycle` | `false` | Se `true`, o horário avança sozinho enquanto o jogo roda |
-| `day_length` | `120` | Duração de um dia completo, em segundos reais |
-| `start_time` | `8` | Horário inicial do "dia de jogo" (`0` a `24`) |
-| `sun_color` | `#fff2c0` | Cor do sol |
-| `moon_color` | `#b9c6e0` | Cor da lua |
-| `stars` | `140` | Quantidade de estrelas desenhadas à noite |
-
-O horário também pode ser ajustado manualmente em tempo real com as teclas `,` `.` (avançar/retroceder) e `P` (pausar/retomar), veja a seção **⌨️ Controles** abaixo.
-
-#### `[BILLBOARDS]` — sprites sempre de frente pra câmera
-
-Sintaxe: `ID caminho/relativo/imagem.png offset_y [escala]`
-
-```
-1 sprites/vaso_planta.png 0.0
-2 sprites/orbe_flutuante.png 0.9 1.5
-```
-`offset_y` é a elevação em blocos em relação ao chão (`0.0` = encostado no chão, valores maiores = flutuando). `escala` é opcional (padrão `1.0`) e multiplica o tamanho do sprite, que por padrão ocupa 1 unidade de mundo de altura. Os `ID`s de `1` a `9` correspondem aos tokens `B1`..`B9` usados na grade do `[MAP]`. Cada instância de billboard é atravessável e sempre encara a câmera, recebendo oclusão correta contra as paredes do DDA.
-
-#### `[PARTICLES]` — sprites animados (flutuando)
-
-Sintaxe: `ID caminho/relativo/imagem.png quantidade velocidade espalhamento`
-
-```
-1 sprites/orbe_flutuante.png 8 0.6 4
-```
-Igual a um billboard, mas gera várias instâncias do sprite flutuando ao redor da célula com movimento animado. `quantidade` (padrão `8`) é o número de partículas por célula, `velocidade` (padrão `0.5`) controla a rapidez do movimento e `espalhamento` (padrão `0.4`) o raio de dispersão ao redor do ponto central. Os `ID`s de `1` a `9` correspondem aos tokens `P1`..`P9` usados na grade do `[MAP]`.
-
-#### `[MAP]` — layout do nível
-
-Matriz de tokens separados por espaço, vírgula ou ponto e vírgula:
-
-- `0`: espaço vazio (área percorrível)
-- `1` a `6`: paredes (definidas em `[TEXTURES]` ou `[COLORS]`)
-- `L1` a `L9`: fontes de luz (definidas em `[LIGHTS]`)
-- `B1` a `B9`: billboards (definidos em `[BILLBOARDS]`)
-- `P1` a `P9`: partículas animadas (definidas em `[PARTICLES]`)
-
-*(O formato legado ainda é aceito: `7` ou mais = luzes definidas em `[LIGHTS]` com o mesmo número.)*
-
 ---
 
 ## 🗺️ Mapas de exemplo
 
-A pasta [`mapas/`](./mapas) já vem com alguns exemplos prontos para testar.
+Todos os exemplos são arquivos `.rcfg` prontos. Rode com `python Raycasting.pyw caminho/do/mapa.rcfg` ou arraste para dentro da janela:
 
-- Basta arrastar o .rcfg do mapa que preferir para dentro da janela do Raycasting
+| Mapa | O que demonstra |
+| :--- | :--- |
+| [`mapas/garden/garden.rcfg`](./mapas/garden/garden.rcfg) | Um jardim com texturas e luz ambiente |
+| [`mapas/backrooms/backrooms.rcfg`](./mapas/backrooms/backrooms.rcfg) | Labirinto com `wall_scale` alto (corredores altos) |
+| [`demos/showcase/showcase.rcfg`](./demos/showcase/showcase.rcfg) | **Autocontido** — céu dinâmico + partículas + billboards (abre só com a pasta dele) |
+| [`demos/festa_colorida.rcfg`](./demos/festa_colorida.rcfg) | Muitas luzes coloridas (stress de GI) |
+| [`demos/billboards/demo_billboards.rcfg`](./demos/billboards/demo_billboards.rcfg) | Billboards estáticos com oclusão |
+| [`demos/waifu_billboard/waifu_billboard.rcfg`](./demos/waifu_billboard/waifu_billboard.rcfg) | Billboards com imagens do dia a dia |
+| [`demos/graphics/Shader.rcfg`](./demos/graphics/Shader.rcfg) | Mapas com muitas paredes/tipos |
+| [`demos/graphics/Global Illumination.rcfg`](./demos/graphics/Global%20Illumination.rcfg) | Rebatimento de luz em cadeia (bounce) |
+
+---
+
+## 🎨 Editor visual de mapas
+
+O repositório inclui [`editor.html`](./editor.html), que roda **direto no navegador** (sem servidor). Abra o arquivo localmente, monte o grid, configure texturas/luzes/céu/billboards/partículas e exporte o `.rcfg`. Ele também **abre** `.rcfg` existentes (arraste o arquivo para a página) e os reescreve na ordem canônica: `CONFIG`, `SPAWN`, `INFO`, `COLORS`, `LIGHTS`, `TEXTURES`, `THEME`, `SKY`, `TITLE`, `BILLBOARDS`, `PARTICLES`, `MAP`.
+
+---
+
+## 📁 Estrutura do projeto
+
+```
+RAYCASTING-ENGINE/
+├── Raycasting.pyw        # arquivo principal — execute este
+├── requirements.txt
+├── editor.html           # editor visual de mapas .rcfg (abre no navegador)
+├── LICENSE
+├── README.md
+├── demos/                # mapas de demonstração
+│   ├── billboards/       # sprites 2D sempre de frente pra câmera
+│   │   ├── demo_billboards.rcfg
+│   │   └── sprites/
+│   │       ├── orbe_flutuante.png
+│   │       └── vaso_planta.png
+│   ├── festa_colorida.rcfg
+│   ├── graphics/         # stress de iluminação
+│   │   ├── Global Illumination.rcfg
+│   │   └── Shader.rcfg
+│   ├── showcase/         # céu + partículas + billboards (autocontido)
+│   │   ├── showcase.rcfg
+│   │   └── sprites/
+│   │       ├── garden.png
+│   │       ├── orbe_flutuante.png
+│   │       └── vaso_planta.png
+│   └── waifu_billboard/
+│       ├── waifu_billboard.rcfg
+│       └── sprites/
+│           ├── folder.png
+│           ├── waifu.jpg
+│           └── youtube.webp
+└── mapas/                # mapas de exemplo
+    ├── backrooms/
+    │   ├── backrooms.rcfg
+    │   └── sprites/
+    │       └── wall.jpg
+    └── garden/
+        ├── garden.rcfg
+        └── sprites/
+            ├── garden.png
+            └── grass.webp
+```
+
+> **Dica de organização:** cada mapa vive em uma pasta própria com seus sprites em `sprites/` ao lado do `.rcfg`, como acima. Assim o mapa é **portátil**: copie a pasta inteira para qualquer lugar e ele continua funcionando.
 
 ---
 
 ## 🧭 Roadmap / ideias futuras
 
 - [ ] Billboards com IA e movimento (entidades vivas)
-- [ ] Otimização de UX do editor de .rcfg
+- [ ] Otimização de UX do editor de `.rcfg`
 - [ ] Sistema de som posicional
 
 *(sinta-se livre para abrir uma issue sugerindo algo)*
