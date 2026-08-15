@@ -118,7 +118,7 @@ As paredes `1` a `9` são definidas em `[TEXTURES]` (imagens) ou, na ausência d
 1 #8a7a63 #5c5041
 ```
 
-Cada linha é `ID cor_ns cor_ew` — a cor varia com a **orientação da parede no grid**: `cor_ns` pinta paredes que correm de norte a sul, `cor_ew` as que correm de leste a oeste (estas saem ~20% mais escuras). É o truque clássico de raycaster para dar sensação de volume.
+Cada linha é `ID cor_ns cor_ew` — a cor é escolhida por **face atingida**: `cor_ns` pinta as faces de paredes que correm de norte a sul, `cor_ew` as de paredes que correm de leste a oeste (estas saem ~20% mais escuras). Truque clássico de raycaster para dar sensação de volume.
 
 Para textura em vez de cor, use `[TEXTURES]` (a imagem entra em espaço sRGB, com correção de gamma no shader):
 
