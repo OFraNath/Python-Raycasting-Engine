@@ -118,7 +118,7 @@ As paredes `1` a `9` são definidas em `[TEXTURES]` (imagens) ou, na ausência d
 1 #8a7a63 #5c5041
 ```
 
-Cada linha é `ID cor_faces_norte_sul cor_faces_leste_oeste` — as duas cores dão profundidade aos dois lados do cubo.
+Cada linha é `ID cor_ns cor_ew` — a cor varia com a **orientação da parede no grid**: `cor_ns` pinta paredes que correm de norte a sul, `cor_ew` as que correm de leste a oeste (estas saem ~20% mais escuras). É o truque clássico de raycaster para dar sensação de volume.
 
 Para textura em vez de cor, use `[TEXTURES]` (a imagem entra em espaço sRGB, com correção de gamma no shader):
 
