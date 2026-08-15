@@ -475,7 +475,7 @@ LIGHT_BOUNCE_RADIUS = DEFAULT_CONFIG["light_bounce_radius"]
 LIGHT_BOUNCE_PASSES = DEFAULT_CONFIG["light_bounce_passes"]
 WALL_SCALE = DEFAULT_CONFIG["wall_scale"]
 light_grid = []
-light_grid_np = None
+light_grid_np: "np.ndarray | None" = None
 LIGHT_W = MAP_W
 LIGHT_H = MAP_H
 px, py, pangle, look_y = 1.5, 1.5, 0.0, 0.0
@@ -487,9 +487,18 @@ MAX_BILLBOARD_INSTANCES = 128
 BILLBOARD_LAYERS = 9
 _BB_LAYER_BY_PATH = {}
 _BB_ASPECT_BY_PATH = {}
-tex_bbTex = None
+tex_bbTex: "moderngl.TextureArray | None" = None
 # ── Flags por célula pro minimapa ──
-tex_mmFlags = None
+tex_mmFlags: "moderngl.Texture | None" = None
+
+# ── Contexto e texturas do renderer ──
+ctx: "moderngl.Context | None" = None
+tex_map: "moderngl.Texture | None" = None
+tex_light: "moderngl.Texture | None" = None
+tex_palA: "moderngl.Texture | None" = None
+tex_palB: "moderngl.Texture | None" = None
+tex_wallArr: "moderngl.TextureArray | None" = None
+tex_hasTex: "moderngl.Texture | None" = None
 
 # ── Tela de carregamento (estado) ──
 LOADING_SCREEN_THRESHOLD_CELLS = 256
@@ -573,12 +582,12 @@ def load_asset_image(caminho_abs, tamanho, contain=False):
         scale = min(tw / w, th / h)
         new_w = max(1, round(w * scale))
         new_h = max(1, round(h * scale))
-        resized = img.resize((new_w, new_h), Image.LANCZOS)
+        resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
         canvas = Image.new("RGBA", (tw, th), (0, 0, 0, 0))
         canvas.paste(resized, ((tw - new_w) // 2, (th - new_h) // 2), resized)
         img = canvas
     elif (w, h) != (tw, th):
-        img = img.resize((tw, th), Image.LANCZOS)
+        img = img.resize((tw, th), Image.Resampling.LANCZOS)
 
     final_arr = np.ascontiguousarray(np.array(img, dtype=np.uint8))
     result = (final_arr, aspect)
@@ -1065,12 +1074,13 @@ def _make_progress_drawer(width, height, label):
     bar_w, bar_h = int(sw * 0.6), 22
     bx, by = (sw - bar_w) // 2, sh // 2
 
-    prog_loading = None
-    vao_loading = None
-    quad_tex = None
+    prog_loading: "moderngl.Program | None" = None
+    vao_loading: "moderngl.VertexArray | None" = None
+    quad_tex: "moderngl.Texture | None" = None
 
     def _ensure_gl():
         nonlocal prog_loading, vao_loading
+        assert ctx is not None
         if prog_loading is not None:
             return
         prog_loading = ctx.program(vertex_shader="""
@@ -1104,6 +1114,7 @@ void main() {
 
     def draw(pct):
         nonlocal quad_tex
+        assert ctx is not None
         pct = max(0.0, min(1.0, pct))
         surf.fill((12, 12, 18))
         pygame.draw.rect(surf, (55, 55, 68), (bx, by, bar_w, bar_h), border_radius=6)
@@ -1113,11 +1124,13 @@ void main() {
         surf.blit(txt, (bx, by - 32))
         data = pygame.image.tobytes(surf, "RGBA", True)
         _ensure_gl()
+        assert prog_loading is not None
+        assert vao_loading is not None
         if quad_tex is not None:
             quad_tex.release()
         quad_tex = ctx.texture((sw, sh), 4, data)
         quad_tex.use(0)
-        prog_loading["u_tex"].value = 0
+        prog_loading["u_tex"] = 0
         ctx.viewport = (0, 0, sw, sh)
         vao_loading.render(mode=moderngl.TRIANGLES)
         pygame.event.pump()
@@ -1168,6 +1181,7 @@ TEXTURE_LAYERS = WALL_MAX
 
 def upload_textures():
     global tex_map, tex_light, tex_palA, tex_palB, tex_wallArr, tex_hasTex, tex_bbTex, tex_mmFlags
+    assert ctx is not None
     if tex_map is not None:
         tex_map.release()
     if tex_light is not None:
@@ -1406,9 +1420,9 @@ def main():
             if e.type == pygame.QUIT:
                 running = False
             elif e.type == pygame.DROPFILE:
-                if os.path.isfile(e.file):
+                if os.path.isfile(getattr(e, "file")):
                     save_current_position(caminho)
-                    caminho = e.file
+                    caminho = getattr(e, "file")
                     load_map_file(caminho)
                     restore_saved_position(caminho)
                     hot_reload_seen_stamp = None
@@ -1419,12 +1433,12 @@ def main():
                     except OSError:
                         pass
             elif e.type == pygame.KEYDOWN:
-                if e.key == pygame.K_ESCAPE:
+                if getattr(e, "key") == pygame.K_ESCAPE:
                     captured = not captured
                     pygame.mouse.set_visible(not captured)
                     pygame.event.set_grab(captured)
                     pygame.mouse.get_rel()
-                elif e.key == pygame.K_r:
+                elif getattr(e, "key") == pygame.K_r:
                     if caminho is not None:
                         load_map_file(caminho)
                         save_current_position(caminho)
@@ -1434,11 +1448,11 @@ def main():
                             hot_reload_seen_stamp = (st.st_mtime, st.st_size)
                         except OSError:
                             pass
-                elif e.key == pygame.K_COMMA:
+                elif getattr(e, "key") == pygame.K_COMMA:
                     SKY_TIME = (SKY_TIME - 0.5) % 24.0
-                elif e.key == pygame.K_PERIOD:
+                elif getattr(e, "key") == pygame.K_PERIOD:
                     SKY_TIME = (SKY_TIME + 0.5) % 24.0
-                elif e.key == pygame.K_p:
+                elif getattr(e, "key") == pygame.K_p:
                     SKY_PAUSED = not SKY_PAUSED
             elif e.type == pygame.MOUSEBUTTONDOWN and not captured:
                 captured = True
@@ -1479,18 +1493,18 @@ def main():
         plane_len = math.tan(FOV / 2) * aspect
         plane_x = -math.sin(pangle) * plane_len
         plane_y = math.cos(pangle) * plane_len
-        prog["u_res"].value = (WIDTH, HEIGHT)
-        prog["u_pos"].value = (px, py)
-        prog["u_dir"].value = (math.cos(pangle), math.sin(pangle))
-        prog["u_plane"].value = (plane_x, plane_y)
-        prog["u_mapSize"].value = (MAP_W, MAP_H)
-        prog["u_horizon"].value = HEIGHT * 0.5 + look_y
-        prog["u_scale"].value = (HEIGHT / (2.0 * math.tan(FOV / 2))) * WALL_SCALE
-        prog["u_ambient"].value = AMBIENT
-        prog["u_fog"].value = FOG
-        prog["u_depth"].value = float(MAX_DEPTH)
-        prog["u_wallMax"].value = float(WALL_MAX)
-        prog["u_orbMin"].value = float(ORB_MIN)
+        prog["u_res"] = (WIDTH, HEIGHT)
+        prog["u_pos"] = (px, py)
+        prog["u_dir"] = (math.cos(pangle), math.sin(pangle))
+        prog["u_plane"] = (plane_x, plane_y)
+        prog["u_mapSize"] = (MAP_W, MAP_H)
+        prog["u_horizon"] = HEIGHT * 0.5 + look_y
+        prog["u_scale"] = (HEIGHT / (2.0 * math.tan(FOV / 2))) * WALL_SCALE
+        prog["u_ambient"] = AMBIENT
+        prog["u_fog"] = FOG
+        prog["u_depth"] = float(MAX_DEPTH)
+        prog["u_wallMax"] = float(WALL_MAX)
+        prog["u_orbMin"] = float(ORB_MIN)
 
         sun_angle = ((SKY_TIME - 12.0) / 24.0) * 2.0 * math.pi
         sun_time_angle = ((SKY_TIME - 6.0) / 24.0) * 2.0 * math.pi
@@ -1509,19 +1523,19 @@ def main():
         ft = [_rgb(THEME["floor_top"])[i] / 255.0 for i in range(3)]
         cr = [_rgb(THEME["crosshair"])[i] / 255.0 for i in range(3)]
         mp = [_rgb(THEME["minimap_player"])[i] / 255.0 for i in range(3)]
-        prog["u_skyB"].value = tuple(sb)
-        prog["u_skyT"].value = tuple(st)
-        prog["u_skyBodies"].value = 1.0 if SKY["enabled"] else 0.0
-        prog["u_sunAngle"].value = sun_angle
-        prog["u_sunElev"].value = sun_elev
-        prog["u_nightFactor"].value = night_factor
-        prog["u_starsCount"].value = float(SKY["stars"])
-        prog["u_sunColor"].value = tuple(c / 255.0 for c in _rgb(SKY["sun_color"]))
-        prog["u_moonColor"].value = tuple(c / 255.0 for c in _rgb(SKY["moon_color"]))
-        prog["u_floorB"].value = tuple(fb)
-        prog["u_floorT"].value = tuple(ft)
-        prog["u_cross"].value = tuple(cr)
-        prog["u_mmPlayer"].value = tuple(mp)
+        prog["u_skyB"] = tuple(sb)
+        prog["u_skyT"] = tuple(st)
+        prog["u_skyBodies"] = 1.0 if SKY["enabled"] else 0.0
+        prog["u_sunAngle"] = sun_angle
+        prog["u_sunElev"] = sun_elev
+        prog["u_nightFactor"] = night_factor
+        prog["u_starsCount"] = float(SKY["stars"])
+        prog["u_sunColor"] = tuple(c / 255.0 for c in _rgb(SKY["sun_color"]))
+        prog["u_moonColor"] = tuple(c / 255.0 for c in _rgb(SKY["moon_color"]))
+        prog["u_floorB"] = tuple(fb)
+        prog["u_floorT"] = tuple(ft)
+        prog["u_cross"] = tuple(cr)
+        prog["u_mmPlayer"] = tuple(mp)
 
         mm_cell = max(1, MM // max(MAP_W, MAP_H))
         mm_w = MAP_W * mm_cell
@@ -1546,43 +1560,49 @@ def main():
             bb_amp[idx] = amp
             bb_vel[idx] = vel
             bb_phase[idx] = fase
-        prog["u_bbCount"].value = len(bb_instances)
-        prog["u_bbPos"].value = bb_pos
-        prog["u_bbLayer"].value = bb_layer
-        prog["u_bbYOff"].value = bb_yoff
-        prog["u_bbAspect"].value = bb_aspect
-        prog["u_bbScale"].value = bb_scale
-        prog["u_bbAmp"].value = bb_amp
-        prog["u_bbVel"].value = bb_vel
-        prog["u_bbPhase"].value = bb_phase
-        prog["u_time"].value = time_sec() - t_start
+        prog["u_bbCount"] = len(bb_instances)
+        prog["u_bbPos"] = bb_pos
+        prog["u_bbLayer"] = bb_layer
+        prog["u_bbYOff"] = bb_yoff
+        prog["u_bbAspect"] = bb_aspect
+        prog["u_bbScale"] = bb_scale
+        prog["u_bbAmp"] = bb_amp
+        prog["u_bbVel"] = bb_vel
+        prog["u_bbPhase"] = bb_phase
+        prog["u_time"] = time_sec() - t_start
 
-        prog["u_mmPos"].value = (mm_x, mm_y)
-        prog["u_mmSize"].value = (mm_w, mm_h)
-        prog["u_mmCell"].value = float(mm_cell)
-        prog["u_playerPix"].value = (mm_x + px * mm_cell, mm_y + py * mm_cell)
+        prog["u_mmPos"] = (mm_x, mm_y)
+        prog["u_mmSize"] = (mm_w, mm_h)
+        prog["u_mmCell"] = float(mm_cell)
+        prog["u_playerPix"] = (mm_x + px * mm_cell, mm_y + py * mm_cell)
         mm_dir_dist = max(0.9, 6.0 / mm_cell)
-        prog["u_dirPix"].value = (mm_x + (px + math.cos(pangle) * mm_dir_dist) * mm_cell,
+        prog["u_dirPix"] = (mm_x + (px + math.cos(pangle) * mm_dir_dist) * mm_cell,
                                   mm_y + (py + math.sin(pangle) * mm_dir_dist) * mm_cell)
 
+        assert tex_map is not None
         tex_map.use(0)
         if tex_light is not None:
             tex_light.use(1)
+        assert tex_palA is not None
         tex_palA.use(2)
+        assert tex_palB is not None
         tex_palB.use(3)
+        assert tex_wallArr is not None
         tex_wallArr.use(4)
+        assert tex_hasTex is not None
         tex_hasTex.use(5)
+        assert tex_bbTex is not None
         tex_bbTex.use(6)
         if tex_mmFlags is not None:
             tex_mmFlags.use(7)
-        prog["u_map"].value = 0
-        prog["u_light"].value = 1
-        prog["u_palA"].value = 2
-        prog["u_palB"].value = 3
-        prog["u_wallTex"].value = 4
-        prog["u_hasTex"].value = 5
-        prog["u_bbTex"].value = 6
-        prog["u_mmFlags"].value = 7
+        prog["u_map"] = 0
+        prog["u_light"] = 1
+        prog["u_palA"] = 2
+        prog["u_palB"] = 3
+        prog["u_wallTex"] = 4
+        prog["u_hasTex"] = 5
+        prog["u_bbTex"] = 6
+        prog["u_mmFlags"] = 7
 
         vao.render(mode=moderngl.TRIANGLES)
         pygame.display.flip()
@@ -1599,6 +1619,7 @@ def main():
             print(f"FPS={tot_frames / (now - t_start):.0f}", flush=True)
             shot = os.environ.get("RC_TEST_SHOT")
             if shot:
+                assert ctx is not None
                 w = ctx.screen.width
                 h = ctx.screen.height
                 data = ctx.screen.read(viewport=(0, 0, w, h), components=3)
