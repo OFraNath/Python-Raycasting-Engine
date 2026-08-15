@@ -1,4 +1,4 @@
-# ══ UMA ENGINE DE RAYCASTING TOTALMENTE FEITA EM PYTHON! ═════════
+# ══ UMA ENGINE DE RAYCASTING FEITA EM PYTHON! ═════════
 
 import sys
 import os
