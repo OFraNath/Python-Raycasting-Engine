@@ -148,13 +148,6 @@
 <div id="status"></div>
 
 <script>
-/* ══════════════════════════════════════════════════════════════════
-   RCFG EDITOR — espelha o parser/serializer de Raycasting.pyw em JS.
-   Formato sempre exportado em "novo" (L1-L9 luz, B1-B9 billboard),
-   mas o carregamento aceita tanto legado (dígitos 7-9 = luz) quanto
-   novo, igual à engine Python.
-   ══════════════════════════════════════════════════════════════════ */
-
 const DEFAULT_CONFIG = {
   window_w:960, window_h:560, mm:140, fov:60, num_rays:200, max_depth:30,
   move_speed:0.06, run_multiplier:1.8, mouse_sens_x:0.004, mouse_sens_y:1.0,
@@ -168,12 +161,8 @@ const THEME_KEYS = ["sky_base","sky_top","floor_base","floor_top","crosshair",
   "hud_light","hud_alert","minimap_player"];
 const DEFAULT_WALL_COLORS = ["#7a6a55","#5590c8","#4caf6b","#c85a8a","#9a6ac8","#c8935a",
   "#c8b45a","#5ac8b0","#c85a5a"];
-// Defaults espelham _parse_sky() da engine: sem a seção, enabled=false (sem
-// sol/lua/estrelas). Quando a seção existe, STARS padrão é 140 (comportamento
-// exato do back-end, que usa d.get("stars", 140)).
 const DEFAULT_SKY = {enabled:false, cycle:false, day_length:120, start_time:8,
   sun_peak:45, sun_color:"#fff2c0", moon_color:"#b9c6e0", stars:140};
-// Defaults de uma entrada nova de [PARTICLES] (mesmos valores de _parse_particles).
 const DEFAULT_PARTICLE = ["", 8, 0.5, 0.4];
 
 function blankMap(rows, cols){
@@ -209,10 +198,10 @@ function freshState(){
 }
 
 let state = freshState();
-let tool = {kind:"wall", n:1}; // kind: empty | wall | light | billboard
+let tool = {kind:"wall", n:1};
 let painting = false;
 let paintErase = false;
-let lastMousePos = {i: 0, j: 0}; // Armazena a última posição do mouse
+let lastMousePos = {i: 0, j: 0};
 
 /* ───────────────────────── PARSER (mirror _parse_sections) ───────────────────────── */
 
@@ -254,22 +243,12 @@ function parseSections(text){
 }
 
 function processMapTokens(rawRows){
-  let isNew = false;
-  for(const row of rawRows) for(const tok of row){
-    const up = tok.toUpperCase();
-    if(up.length>=2 && (up[0]==="L"||up[0]==="B"||up[0]==="P") && /^\d+$/.test(up.slice(1))){ isNew = true; break; }
-    if(up==="N" || up.includes("+")){ isNew = true; break; }
-  }
   const grid = [];
-  const legacyLightRemap = {}; // legacy digit -> new n (1..)
   for(const row of rawRows){
     const outRow = [];
     for(const tok of row){
       const up = tok.toUpperCase();
       if(up.includes("+")){
-        // token composto (PLANO.md item 4): "base+L#+B#+P#" — preserva
-        // camadas em vez de descartá-las (mesmo bug de raiz do item 6,
-        // agora pro separador "+").
         const partes = up.split("+");
         const baseTok = partes[0];
         let outBase = "0";
@@ -284,33 +263,17 @@ function processMapTokens(rawRows){
           }
         }
         outRow.push([outBase, ...outExtras].join("+"));
-      } else if(up.length>=2 && up[0]==="L" && /^\d+$/.test(up.slice(1))){
-        const n = parseInt(up.slice(1),10);
-        outRow.push("L"+n);
-      } else if(up.length>=2 && up[0]==="B" && /^\d+$/.test(up.slice(1))){
-        const n = parseInt(up.slice(1),10);
-        outRow.push("B"+n);
-      } else if(up.length>=2 && up[0]==="P" && /^\d+$/.test(up.slice(1))){
-        const n = parseInt(up.slice(1),10);
-        outRow.push("P"+n);
       } else if(up==="N"){
         outRow.push("N");
       } else if(/^\d+$/.test(tok)){
-        const d = parseInt(tok,10);
-        if(!isNew && d>=7){
-          const n = d-6;
-          legacyLightRemap[d]=n;
-          outRow.push("L"+n);
-        } else {
-          outRow.push(String(d));
-        }
+        outRow.push(String(parseInt(tok,10)));
       } else {
         outRow.push("0");
       }
     }
     grid.push(outRow);
   }
-  return {grid, isNew, legacyLightRemap};
+  return {grid};
 }
 
 function loadRcfg(text){
@@ -320,7 +283,7 @@ function loadRcfg(text){
   for(let i=0;i<dados.MAP.length;i++){
     if(dados.MAP[i].length!==width) throw new Error(`linha ${i+1} tem ${dados.MAP[i].length} colunas, o mapa precisa de ${width}`);
   }
-  const {grid, isNew, legacyLightRemap} = processMapTokens(dados.MAP);
+  const {grid} = processMapTokens(dados.MAP);
 
   const s = freshState();
   s.map = grid;
@@ -375,8 +338,7 @@ function loadRcfg(text){
     const partes = valor.split(/[\s,]+/).filter(Boolean);
     const cor = partes[0] ? normColor(partes[0]) : "#ffcc88";
     const raio = partes[1] ? parseFloat(partes[1]) : 4.0;
-    let n = parseInt(tipoRaw);
-    if(!isNew && legacyLightRemap[n]!==undefined) n = legacyLightRemap[n];
+    const n = parseInt(tipoRaw);
     s.lights[n] = [cor, raio];
   }
 
@@ -398,13 +360,8 @@ function loadRcfg(text){
 
   s.sky = {...DEFAULT_SKY};
   const skySec = dados.SKY || {};
-  // "enabled" = presença da seção: é assim que a engine decide se desenha
-  // sol/lua/estrelas (sky["enabled"] = bool(dados["SKY"])).
   s.sky.enabled = Object.keys(skySec).length > 0;
   s.sky.cycle = ["1","true","yes"].includes(String(skySec.cycle||"").trim().toLowerCase());
-  // Clamps espelham _parse_sky() da engine: day_length >= 1, hora % 24,
-  // sun_peak 10..90, stars >= 0. Sem isso o editor mostraria um valor que a
-  // engine troca na carga (ex.: DAY_LENGTH 0 vira 1, STARS -5 vira 0).
   s.sky.day_length = Math.max(1, parseFloat(skySec.day_length ?? DEFAULT_SKY.day_length));
   s.sky.start_time = parseFloat(skySec.start_time ?? DEFAULT_SKY.start_time) % 24;
   s.sky.sun_peak = Math.max(10, Math.min(90, parseFloat(skySec.sun_peak ?? DEFAULT_SKY.sun_peak)));
@@ -496,9 +453,6 @@ function serializeRcfg(s){
     L.push("");
   }
   if(s.sky && s.sky.enabled){
-    // Normalização igual à da engine (_parse_sky) para o arquivo salvo nunca
-    // carregar "diferente" do que o editor mostra: DAY_LENGTH >= 1, hora % 24,
-    // SUN_PEAK 10..90, STARS >= 0.
     L.push("[SKY]");
     L.push(`CYCLE ${s.sky.cycle ? "true" : "false"}`);
     L.push(`DAY_LENGTH ${Math.max(1, parseFloat(s.sky.day_length))}`);
@@ -592,18 +546,11 @@ function paletteHTML(){
 }
 
 function parseToken(tok){
-  // Divide um token do [MAP] em {base, extras}: base é "0"/dígito/"N", extras
-  // é um objeto {L?:n, B?:n, P?:n} — no máx. 1 índice por letra (item 4).
   const parts = String(tok).split("+");
-  let base = parts[0];
+  const base = parts[0];
   const extras = {};
   for(const p of parts.slice(1)){
     if(p.length>=2 && "LBP".includes(p[0]) && /^\d+$/.test(p.slice(1))) extras[p[0]] = parseInt(p.slice(1),10);
-  }
-  // formato antigo/solto: token inteiro é "L#"/"B#"/"P#" sem "+" → base implícita "0"
-  if(base.length>=2 && "LBP".includes(base[0]) && /^\d+$/.test(base.slice(1))){
-    extras[base[0]] = parseInt(base.slice(1),10);
-    base = "0";
   }
   return {base, extras};
 }
@@ -621,10 +568,6 @@ function tokenFor(kind,n){
   if(kind==="particle") return "P"+n;
   return "0";
 }
-// Pinta a ferramenta atual em cima do token existente, preservando as
-// camadas que não pertencem à ferramenta selecionada (PLANO.md item 4):
-// ferramentas de Terreno (empty/wall/invisible) só mexem na base; ferramentas
-// de camada (light/billboard/particle) só adicionam/removem seu próprio "+X".
 function applyPaint(oldTok, kind, n, erase){
   const {base, extras} = parseToken(oldTok);
   if(kind==="empty" || kind==="wall" || kind==="invisible"){
@@ -647,11 +590,6 @@ let cell = 26;
 let scrollX = 0, scrollY = 0;
 let rafPending = false;
 
-/* ─── viewport-culled rendering: só desenhamos as células visíveis.
-   Isso é o que permite mapas gigantes (milhares de células) sem travar
-   e sem esbarrar no limite de dimensão de <canvas> de alguns navegadores
-   (o canvas real tem só o tamanho da área visível). ─── */
-
 function resizeCanvasToViewport(){
   const w = wrap.clientWidth, h = wrap.clientHeight;
   if(canvas.width!==w || canvas.height!==h){
@@ -665,7 +603,6 @@ function scheduleDraw(){
   requestAnimationFrame(()=>{ rafPending=false; drawViewport(); });
 }
 
-// desenha o conteúdo de uma célula (assume que ctx já está com o transform certo)
 function renderCellShape(i,j){
   const {base, extras} = parseToken(state.map[j][i]);
   const tok = base;
@@ -751,7 +688,6 @@ function drawViewport(){
   drawSpawnMarker(i0,j0,i1,j1);
 }
 
-// redesenha a célula (i,j) e suas vizinhas para não "cortar" marcadores/luzes que vazam de borda
 function drawCell(i, j) {
   const rows = state.map.length, cols = state.map[0]?.length || 0;
   
@@ -762,7 +698,6 @@ function drawCell(i, j) {
 
   ctx.setTransform(1, 0, 0, 1, -scrollX, -scrollY);
 
-  // limpa e desenha o fundo/terreno de toda a vizinhança afetada
   for (let cJ = j0; cJ <= j1; cJ++) {
     for (let cI = i0; cI <= i1; cI++) {
       ctx.clearRect(cI * cell, cJ * cell, cell, cell);
@@ -770,7 +705,6 @@ function drawCell(i, j) {
     }
   }
 
-  // redesenha o marcador do player garantindo que não fique "comido"
   drawSpawnMarker(i0, j0, i1, j1);
 }
 
@@ -815,8 +749,6 @@ function computeStats(){
   document.getElementById("statP").textContent = p;
 }
 
-/* ─── undo/redo por stroke (agrupa todas as células alteradas entre
-   mousedown e mouseup num único passo de undo, barato mesmo em mapas grandes) ─── */
 let undoStack = [], redoStack = [];
 let currentStroke = null;
 
@@ -847,7 +779,6 @@ function applyStroke(stroke, useAfter){
 function undo(){
   if(!undoStack.length) return;
   const stroke = undoStack.pop();
-  // completa "after" com o valor atual antes de reverter
   for(const rec of stroke.values()) rec.after = state.map[rec.j][rec.i];
   applyStroke(stroke, false);
   redoStack.push(stroke);
@@ -866,7 +797,7 @@ function paintAt(i,j,erase){
   if(i<0||j<0||i>=cols||j>=rows) return;
   const old = state.map[j][i];
   const val = applyPaint(old, tool.kind, tool.n, erase);
-  if(old===val) return; // nada mudou, evita redraw à toa
+  if(old===val) return;
   if(currentStroke) recordChange(i,j,old);
   bumpStat(old,-1);
   state.map[j][i] = val;
@@ -888,15 +819,12 @@ function fillRect(i0,j0,i1,j1,erase){
   scheduleDraw();
 }
 
-let dragStart = null; // {i,j} quando shift+arraste pra retângulo
+let dragStart = null;
 let hoverEl = document.getElementById("hoverCoord");
 
 canvas.addEventListener("mousedown", e=>{
   if (e.button !== 0 && e.button !== 2) return;
   painting = true;
-  // Botão 0 (Esquerdo): pinta a ferramenta selecionada.
-  // Botão 2 (Direito): apaga só a camada da ferramenta selecionada
-  // (base -> "0"; light/billboard/particle -> remove o "+X" daquela letra).
   paintErase = (e.button === 2);
   beginStroke();
   const {i,j} = cellFromEvent(e);
@@ -912,7 +840,7 @@ canvas.addEventListener("mousemove", e=>{
   hoverEl.textContent = (i>=0&&j>=0&&i<cols&&j<rows) ? `(${i}, ${j})` : "—";
   if(!painting) return;
   if(dragStart){
-    scheduleDraw(); // redesenha viewport puro; overlay do retângulo abaixo
+    scheduleDraw();
     requestAnimationFrame(()=>{
       ctx.setTransform(1,0,0,1,-scrollX,-scrollY);
       const x0=Math.min(dragStart.i,i)*cell, y0=Math.min(dragStart.j,j)*cell;
@@ -927,7 +855,6 @@ canvas.addEventListener("mousemove", e=>{
 });
 canvas.addEventListener("mouseleave", ()=>{ hoverEl.textContent="—"; });
 
-// Handler unificado de mouseup para evitar conflitos de escopo e ordem
 window.addEventListener("mouseup", e=>{
   if(painting){
     if(dragStart){
@@ -939,18 +866,16 @@ window.addEventListener("mouseup", e=>{
   }
 });
 
-// Previne o menu de contexto padrão do botão direito no canvas
 canvas.addEventListener("contextmenu", e=>{
   e.preventDefault();
 });
 
-// zoom com roda do mouse (Ctrl/Cmd + roda), centrado no cursor
 canvas.addEventListener("wheel", e=>{
   if(!(e.ctrlKey||e.metaKey)) return;
   e.preventDefault();
   const rect = canvas.getBoundingClientRect();
   const worldX = (e.clientX-rect.left)+scrollX, worldY = (e.clientY-rect.top)+scrollY;
-  const fx = worldX/cell, fy = worldY/cell; // posição em coordenadas de célula
+  const fx = worldX/cell, fy = worldY/cell;
   const zoomInput = document.getElementById("zoomInput");
   let newCell = cell + (e.deltaY<0 ? 2 : -2);
   newCell = Math.max(4, Math.min(48, newCell));
@@ -985,8 +910,6 @@ document.getElementById("btnResize").onclick = ()=>{
       if(j<oldRows && i<oldCols){
         row.push(state.map[j][i]);
       } else {
-        // célula nova: se cair na borda externa do mapa redimensionado,
-        // vira parede (igual a um mapa novo) pra não deixar o mapa "aberto"
         const onNewBorder = (i===0 || j===0 || i===newCols-1 || j===newRows-1);
         row.push(onNewBorder ? "1" : "0");
       }
@@ -1000,9 +923,6 @@ document.getElementById("btnResize").onclick = ()=>{
   toast(`Mapa redimensionado para ${newCols}×${newRows}`);
 };
 
-/* ─── atalhos de teclado ───
-   0-9 = seleciona parede/vazio · Delete/Backspace = ferramenta vazio
-   Ctrl+Z = desfazer · Ctrl+Y / Ctrl+Shift+Z = refazer */
 window.addEventListener("keydown", e=>{
   const tgt = e.target;
   if(tgt && (tgt.tagName==="INPUT" || tgt.tagName==="TEXTAREA")) return;
@@ -1062,8 +982,6 @@ function field(label, value, onChange, opts={}){
   if(opts.max !== undefined) inp.max = opts.max;
   inp.value = value;
   inp.oninput = ()=> onChange(opts.type==="number" ? parseFloat(inp.value) : inp.value);
-  // Clamp no blur para os limites ficarem visíveis logo ao sair do campo
-  // (sem atrapalhar a digitação): número fora de min/max é corrigido na hora.
   if(opts.type==="number"){
     inp.onblur = ()=>{
       let v = parseFloat(inp.value);

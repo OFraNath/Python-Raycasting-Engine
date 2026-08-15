@@ -42,9 +42,6 @@ DEFAULT_CONFIG = {
 
 LIGHT_RES_VALIDOS = (1, 2, 4, 8, 16, 32)
 
-ORB_MIN = 7
-WALL_MAX = 6
-
 
 def _parse_color(text):
     text = text.strip().lstrip("#")
@@ -254,39 +251,17 @@ def _parse_lights(d):
     return lights
 
 
-WALL_MAX_LEGADO = 6
-ORB_MIN_LEGADO = 7
-
-WALL_MAX_NOVO = 9
-ORB_MIN_NOVO = 100
-
+WALL_MAX = 9
+ORB_MIN = 100
 INVISIBLE_WALL = 99
 
 
 def _split_map_token(tok):
     partes = tok.split("+")
-    base = partes[0]
-    extras = partes[1:]
-    up_base = base.upper()
-    if len(up_base) >= 2 and up_base[0] in ("L", "B", "P") and up_base[1:].isdigit():
-        extras = [base] + extras
-        base = "0"
-    return base, extras
+    return partes[0], partes[1:]
 
 
 def _process_map_tokens(raw_rows):
-    is_new_format = False
-    for row in raw_rows:
-        for tok in row:
-            base, extras = _split_map_token(tok)
-            if extras or base.upper() == "N":
-                is_new_format = True
-                break
-        if is_new_format:
-            break
-    wall_max = WALL_MAX_NOVO if is_new_format else WALL_MAX_LEGADO
-    orb_min = ORB_MIN_NOVO if is_new_format else ORB_MIN_LEGADO
-
     grid = []
     billboards = []
     particles = []
@@ -316,13 +291,13 @@ def _process_map_tokens(raw_rows):
                 if not (1 <= n <= 9):
                     raise ValueError(f"{extra!r}: índice deve ser 1-9")
                 if letra == "L":
-                    light_cells[(i, j)] = orb_min + (n - 1)
+                    light_cells[(i, j)] = ORB_MIN + (n - 1)
                 elif letra == "B":
                     billboards.append((i + 0.5, j + 0.5, n))
                 else:
                     particles.append((i + 0.5, j + 0.5, n))
         grid.append(int_row)
-    return grid, billboards, particles, light_cells, wall_max, orb_min, is_new_format
+    return grid, billboards, particles, light_cells
 
 
 def _parse_billboards(d, pasta_base):
@@ -394,15 +369,14 @@ def load_rcfg(caminho):
         if len(row) != largura:
             raise ValueError(f"linha {i + 1} tem {len(row)} colunas, o mapa precisa de {largura}")
 
-    mapa, billboard_cells, particle_cells, light_cells, wall_max, orb_min, is_new_format = _process_map_tokens(raw_mapa)
-    spawn = _parse_spawn(dados.get("SPAWN", {}), mapa, orb_min)
+    mapa, billboard_cells, particle_cells, light_cells = _process_map_tokens(raw_mapa)
+    spawn = _parse_spawn(dados.get("SPAWN", {}), mapa, ORB_MIN)
     pasta_base = os.path.dirname(os.path.abspath(caminho))
     texturas_rel = _parse_textures(dados.get("TEXTURES", {}))
     texturas_abs = {t: os.path.join(pasta_base, rel) for t, rel in texturas_rel.items()}
 
     lights = _parse_lights(dados.get("LIGHTS", {}))
-    if is_new_format:
-        lights = {orb_min + (n - 1): v for n, v in lights.items() if 1 <= n <= 9}
+    lights = {ORB_MIN + (n - 1): v for n, v in lights.items() if 1 <= n <= 9}
 
     billboard_defs = _parse_billboards(dados.get("BILLBOARDS", {}), pasta_base)
     billboard_instances = [
@@ -424,8 +398,6 @@ def load_rcfg(caminho):
         "map": mapa,
         "lights": lights,
         "textures": texturas_abs,
-        "wall_max": wall_max,
-        "orb_min": orb_min,
         "billboards": billboard_instances + particle_instances,
         "light_cells": light_cells,
     }
@@ -447,9 +419,8 @@ BOOT_MAP_TOKENS = [
     ["1"] + ["0"] * 10 + ["1"],
     ["1"] * 12,
 ]
-(BOOT_MAP, _boot_bb, _boot_particles, BOOT_LIGHT_CELLS,
- BOOT_WALL_MAX, BOOT_ORB_MIN, _boot_is_new) = _process_map_tokens(BOOT_MAP_TOKENS)
-BOOT_LIGHT_ORBS = {BOOT_ORB_MIN: ("#ffcc88", 4.0)}
+(BOOT_MAP, _boot_bb, _boot_particles, BOOT_LIGHT_CELLS) = _process_map_tokens(BOOT_MAP_TOKENS)
+BOOT_LIGHT_ORBS = {ORB_MIN: ("#ffcc88", 4.0)}
 
 THEME_DEFAULTS = {
     "sky_base": "#080a23",
@@ -494,8 +465,6 @@ TEXTURE_SIZE = DEFAULT_CONFIG["texture_size"]
 THEME = dict(THEME_DEFAULTS)
 LIGHT_ORBS = dict(BOOT_LIGHT_ORBS)
 LIGHT_CELLS = dict(BOOT_LIGHT_CELLS)
-ORB_MIN = BOOT_ORB_MIN
-WALL_MAX = BOOT_WALL_MAX
 LIGHT_RES = DEFAULT_CONFIG["light_res"]
 LIGHT_SOFT_SAMPLES = DEFAULT_CONFIG["light_soft_samples"]
 LIGHT_SOFT_RADIUS = DEFAULT_CONFIG["light_soft_radius"]
@@ -1192,7 +1161,7 @@ def init_display():
     upload_textures()
 
 
-TEXTURE_LAYERS = WALL_MAX_NOVO
+TEXTURE_LAYERS = WALL_MAX
 
 
 def upload_textures():
@@ -1302,7 +1271,7 @@ def load_map_file(caminho, preserve_position=False):
     global LIGHT_SOFT_SAMPLES, LIGHT_SOFT_RADIUS, LIGHT_BOUNCE, LIGHT_BOUNCE_RADIUS, LIGHT_BOUNCE_PASSES
     global WIDTH, HEIGHT, FOV, MAX_DEPTH, MOVE_SPEED, RUN_MULTIPLIER, MOUSE_SENS_X
     global MOUSE_SENS_Y, MAX_LOOK_Y, MM, SPAWN, px, py, pangle, look_y
-    global WALL_MAX, ORB_MIN, BILLBOARDS, WALL_SCALE, LIGHT_CELLS
+    global BILLBOARDS, WALL_SCALE, LIGHT_CELLS
     global SKY, SKY_TIME, SKY_PAUSED
     data = load_rcfg(caminho)
     cfg = data["config"]
@@ -1342,8 +1311,6 @@ def load_map_file(caminho, preserve_position=False):
     if not preserve_position:
         px, py, pangle = SPAWN
         look_y = 0
-    WALL_MAX = data["wall_max"]
-    ORB_MIN = data["orb_min"]
     BILLBOARDS = data["billboards"]
     LIGHT_CELLS = data["light_cells"]
 
