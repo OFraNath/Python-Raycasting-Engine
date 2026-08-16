@@ -168,7 +168,46 @@ Sprites 2D que sempre encaram a câmera e recebem oclusão correta das paredes. 
 1 1 1 1 1
 ```
 
-Sintaxe: `ID caminho offset_y [escala]`. `offset_y` eleva o sprite em relação ao chão (unidades de mundo; `0` = encostado, valores maiores = flutuando). `escala` (padrão `1.0`) multiplica o tamanho — por padrão o sprite ocupa 1 unidade de altura. Cada célula com `B#` é atravessável.
+Sintaxe: `ID caminho offset_y [escala] [ai_type] [speed]`. `offset_y` eleva o sprite em relação ao chão (unidades de mundo; `0` = encostado, valores maiores = flutuando). `escala` (padrão `1.0`) multiplica o tamanho — por padrão o sprite ocupa 1 unidade de altura. Cada célula com `B#` é atravessável.
+
+Os tokens opcionais `ai_type` e `speed` transformam o billboard num agente que se move pelo mapa (veja **§5.1**) e, se quiser, numa fonte de áudio espacial (veja **§5.2**):
+
+- `ai_type` (padrão `none`): `none` = estático; `friendly` = seguidor; `enemy` = perseguidor.
+- `speed` (unidades de mundo por frame): padrão `0.035` (amigável) e `0.05` (inimigo) quando omitido.
+
+### 5.1 IA dos Billboards (FSM + Pathfinding)
+
+Um billboard com `ai_type` diferente de `none` vira um agente que navega o labirinto usando uma **máquina de estados (FSM)** acoplada a um **pathfinding por onda (BFS / wavefront)**:
+
+- **Amigável (`friendly`)** — FSM `FOLLOW → STAY_CLOSE`: segue o jogador e para a ~1,2 de distância, orbitando suavemente. Não causa dano.
+- **Inimigo (`enemy`)** — FSM `CHASE → GAME_OVER_TRIGGER`: persegue o jogador pelo labirinto. A engine calcula uma grade de distâncias a partir da posição do jogador (BFS) e o inimigo desce o gradiente, contornando paredes; quando está na mesma célula, faz *homing* direto para não travar.
+
+**Game Over:** se o inimigo encosta no jogador (`dist < 0,5`), surge uma tela **"GAME OVER"** por 2 segundos e o mapa é restaurado (jogador e billboards com IA voltam ao seu spawn original).
+
+**Minimapa:** billboards com IA aparecem como um ponto **móvel** (âmbar = amigável, vermelho = inimigo). O ponto estático de spawn é suprimido para essas células, para não confundir com o jogador.
+
+### 5.2 Som posicional estéreo (opcional)
+
+Cada tipo de billboard pode ter um áudio de loop associado numa nova seção `[BILLBOARD_SOUNDS]`, indexada pelo **mesmo índice** do billboard (`1` a `9`), usada como `B1`..`B9`:
+
+```ini
+[BILLBOARDS]
+1 assets/waifu.png 0.0 1.0 friendly 0.04
+2 assets/monstro.png 0.0 1.0 enemy
+
+[BILLBOARD_SOUNDS]
+1 assets/ambiente.mp3 10.0 1.0
+2 assets/rugido.mp3 14.0 4.0
+```
+
+Sintaxe: `ID caminho_do_audio raio volume`.
+
+- **Loop infinito:** o som toca continuamente enquanto o mapa estiver carregado.
+- **Estéreo posicional:** o volume é dividido entre os canais esquerdo/direito conforme o ângulo do emissor em relação à sua mira (pan), e atenua com a distância até `raio` (silêncio total fora do raio).
+- **Oclusão por parede:** cada parede entre o emissor e o jogador reduz o volume em `~0.45^paredes`, simulando som abafado atrás de muros.
+- **Volume 0–10:** `1` = volume original (1×); valores maiores amplificam até 10×. Funciona tanto para billboards parados quanto para os que se movem (IA).
+
+> O mixer é iniciado automaticamente na primeira carga de um mapa que tenha `[BILLBOARD_SOUNDS]`; mapas sem som não inicializam áudio.
 
 ### 6. Partículas (sprites animados)
 
@@ -342,14 +381,33 @@ O horário também se controla em tempo real com `,` `.` e `P`.
 
 ### `[BILLBOARDS]` — sprites sempre de frente pra câmera
 
-Sintaxe: `ID caminho/relativo/imagem.png offset_y [escala]` (índices `1` a `9`, usados como `B1`..`B9`)
+Sintaxe: `ID caminho/relativo/imagem.png offset_y [escala] [ai_type] [speed]` (índices `1` a `9`, usados como `B1`..`B9`)
 
 ```
 1 assets/vaso_planta.png 0.0
 2 assets/orbe_flutuante.png 0.9 1.5
+3 assets/monstro.png 0.0 1.0 enemy 0.05
 ```
 
 `offset_y` é a elevação em blocos em relação ao chão (`0.0` = no chão; valores maiores = flutuando). `escala` (padrão `1.0`) multiplica o sprite, que ocupa 1 unidade de altura. Cada célula com `B#` é atravessável e sempre encara a câmera, com oclusão correta contra as paredes.
+
+Token opcionais (deixe de fora para billboards estáticos):
+
+| Token | Valores | Padrão | Descrição |
+| :--- | :--- | :--- | :--- |
+| `ai_type` | `none` / `friendly` / `enemy` | `none` | Comportamento de IA (ver tutorial **§5.1**) |
+| `speed` | número | `0.035` (friendly) / `0.05` (enemy) | Velocidade de deslocamento em unidades de mundo por frame |
+
+### `[BILLBOARD_SOUNDS]` — áudio espacial por tipo de billboard (opcional)
+
+Sintaxe: `ID caminho/relativo/audio.ext raio volume` (índices `1` a `9`, casam com os `B#` de `[BILLBOARDS]`)
+
+```
+1 assets/ambiente.mp3 10.0 1.0
+2 assets/rugido.mp3 14.0 4.0
+```
+
+Cada entrada vincula um áudio de **loop infinito** a um tipo de billboard. O som é **estéreo posicional** (pan pelo ângulo relativo à mira, atenuação até `raio`) e sofre **oclusão** (`~0.45^paredes` entre emissor e jogador). `volume` vai de `0` a `10` (`1` = original, até `10×` amplificado). O mixer é iniciado só quando o mapa tem esta seção (ver tutorial **§5.2**).
 
 ### `[PARTICLES]` — sprites animados (flutuando)
 
@@ -414,7 +472,7 @@ ou arraste o arquivo para dentro da janela.
 
 ## Editor visual de mapas
 
-O repositório inclui [`editor.html`](./editor.html), que roda **direto no navegador** (sem servidor). Abra o arquivo localmente, monte o grid, configure texturas/luzes/céu/billboards/partículas e exporte o `.rcfg`. Ele também **abre** `.rcfg` existentes (arraste o arquivo para a página) e os reescreve na ordem canônica: `CONFIG`, `SPAWN`, `INFO`, `COLORS`, `LIGHTS`, `TEXTURES`, `THEME`, `SKY`, `TITLE`, `BILLBOARDS`, `PARTICLES`, `MAP`.
+O repositório inclui [`editor.html`](./editor.html), que roda **direto no navegador** (sem servidor). Abra o arquivo localmente, monte o grid, configure texturas/luzes/céu/billboards/partículas e exporte o `.rcfg`. No painel **Billboards** você também define o **Tipo de IA** (Nenhum/Amigável/Inimigo), a **Velocidade da IA** e, no fieldset **Som posicional**, o caminho do áudio, o raio e o volume (0–10) por tipo. Ele também **abre** `.rcfg` existentes (arraste o arquivo para a página) e os reescreve na ordem canônica: `CONFIG`, `SPAWN`, `INFO`, `COLORS`, `LIGHTS`, `TEXTURES`, `THEME`, `SKY`, `TITLE`, `BILLBOARDS`, `BILLBOARD_SOUNDS`, `PARTICLES`, `MAP`.
 
 ---
 
@@ -450,7 +508,8 @@ RAYCASTING-ENGINE/
 
 - [ ] Otimização de desempenho da engine
 - [ ] Melhoria gráfica da engine
-- [ ] Sistema de som posicional
+- [x] Sistema de som posicional (estéreo + oclusão por parede)
+- [ ] Muffle / low-pass real por parede (fase 2 do som)
 
 *(sinta-se livre para abrir uma issue sugerindo algo)*
 
