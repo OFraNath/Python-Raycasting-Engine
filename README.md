@@ -47,7 +47,7 @@ python Raycasting.pyw
 Passando o caminho de um `.rcfg`, esse mapa é carregado na inicialização:
 
 ```bash
-python Raycasting.pyw mapas/garden/garden.rcfg
+python Raycasting.pyw showcase.rcfg
 ```
 
 **Durante a execução:**
@@ -73,7 +73,7 @@ python Raycasting.pyw mapas/garden/garden.rcfg
 
 Um mapa é um arquivo de texto com extensão `.rcfg`. Ele tem seções (entre `[COLCHETES]`) e uma grade de células em `[MAP]`. Siga o passo a passo abaixo — cada bloco é uma seção real que a engine entende.
 
-> **Regra de ouro dos caminhos:** a engine resolve os caminhos de imagens **relativos à pasta do próprio `.rcfg`**. Coloque as imagens numa subpasta `sprites/` ao lado do arquivo, como fazem os exemplos em [`demos/`](./demos) e [`mapas/`](./mapas).
+> **Regra de ouro dos caminhos:** a engine resolve os caminhos de imagens **relativos à pasta do próprio `.rcfg`**. O mapa de exemplo [`showcase.rcfg`](./showcase.rcfg) usa a pasta [`assets/`](./assets) na raiz do projeto; se você criar seus próprios mapas, pode organizá-los como preferir (uma `sprites/` ao lado do arquivo funciona bem para mapas portáteis).
 
 ### 1. Esqueleto do arquivo
 
@@ -405,18 +405,15 @@ angle 0
 
 ---
 
-## 🗺️ Mapas de exemplo
+## 🗺️ Mapa de exemplo
 
-Todos os exemplos são arquivos `.rcfg` prontos. Rode com `python Raycasting.pyw caminho/do/mapa.rcfg` ou arraste para dentro da janela:
+As antigas demonstrações separadas (`demos/`, `mapas/`) foram **unificadas em uma única vitrine**, [`showcase.rcfg`](./showcase.rcfg), na raiz do projeto — reúne texturas, luzes, céu dinâmico, billboards e partículas num só lugar. Rode com:
 
-- [`mapas/garden/garden.rcfg`](./mapas/garden/garden.rcfg)
-- [`mapas/backrooms/backrooms.rcfg`](./mapas/backrooms/backrooms.rcfg)
-- [`demos/showcase/showcase.rcfg`](./demos/showcase/showcase.rcfg)
-- [`demos/festa_colorida.rcfg`](./demos/festa_colorida.rcfg)
-- [`demos/billboards/demo_billboards.rcfg`](./demos/billboards/demo_billboards.rcfg)
-- [`demos/waifu_billboard/waifu_billboard.rcfg`](./demos/waifu_billboard/waifu_billboard.rcfg)
-- [`demos/graphics/Shader.rcfg`](./demos/graphics/Shader.rcfg)
-- [`demos/graphics/Global Illumination.rcfg`](./demos/graphics/Global%20Illumination.rcfg)
+```bash
+python Raycasting.pyw showcase.rcfg
+```
+
+ou arraste o arquivo para dentro da janela.
 
 ---
 
@@ -433,43 +430,24 @@ RAYCASTING-ENGINE/
 ├── Raycasting.pyw        # arquivo principal — execute este
 ├── requirements.txt
 ├── editor.html           # editor visual de mapas .rcfg (abre no navegador)
+├── showcase.rcfg         # mapa de exemplo (texturas, luzes, céu, billboards e partículas)
 ├── LICENSE
 ├── README.md
-├── demos/                # mapas de demonstração
-│   ├── billboards/       # sprites 2D sempre de frente pra câmera
-│   │   ├── demo_billboards.rcfg
-│   │   └── sprites/
-│   │       ├── orbe_flutuante.png
-│   │       └── vaso_planta.png
-│   ├── festa_colorida.rcfg
-│   ├── graphics/         # stress de iluminação
-│   │   ├── Global Illumination.rcfg
-│   │   └── Shader.rcfg
-│   ├── showcase/         # céu + partículas + billboards (autocontido)
-│   │   ├── showcase.rcfg
-│   │   └── sprites/
-│   │       ├── garden.png
-│   │       ├── orbe_flutuante.png
-│   │       └── vaso_planta.png
-│   └── waifu_billboard/
-│       ├── waifu_billboard.rcfg
-│       └── sprites/
-│           ├── folder.png
-│           ├── waifu.jpg
-│           └── youtube.webp
-└── mapas/                # mapas de exemplo
-    ├── backrooms/
-    │   ├── backrooms.rcfg
-    │   └── sprites/
-    │       └── wall.jpg
-    └── garden/
-        ├── garden.rcfg
-        └── sprites/
-            ├── garden.png
-            └── grass.webp
+└── assets/               # imagens usadas pelo showcase.rcfg
+    ├── floating_orb.png
+    ├── folder.png
+    ├── garden_bush.png
+    ├── garden_wall.png
+    ├── grass.webp
+    ├── metal.jpg
+    ├── plant_pot.png
+    ├── sparkle.png
+    ├── waifu.png
+    ├── wall.jpg
+    └── youtube.webp
 ```
 
-> **Dica de organização:** cada mapa vive em uma pasta própria com seus sprites em `sprites/` ao lado do `.rcfg`, como acima. Assim o mapa é **portátil**: copie a pasta inteira para qualquer lugar e ele continua funcionando.
+> **Dica de organização:** para seus próprios mapas, uma boa prática é manter cada mapa em uma pasta própria com os sprites em `sprites/` ao lado do `.rcfg`. Assim o mapa fica **portátil**: copie a pasta inteira para qualquer lugar e ele continua funcionando.
 
 ---
 
