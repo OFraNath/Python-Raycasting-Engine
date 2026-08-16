@@ -337,6 +337,24 @@ def _parse_billboards(d, pasta_base):
     return billboards
 
 
+def _parse_billboard_sounds(d, pasta_base):
+    sons = {}
+    for tipo, valor in d.items():
+        try:
+            tipo_int = int(tipo)
+        except ValueError:
+            raise ValueError(f"tipo de som de billboard inválido: {tipo!r}")
+        partes = re.split(r"[\s,]+", valor)
+        caminho_rel = partes[0].strip() if partes and partes[0] else ""
+        if not caminho_rel:
+            continue
+        raio = float(partes[1]) if len(partes) >= 2 and partes[1] else 8.0
+        volume = float(partes[2]) if len(partes) >= 3 and partes[2] else 1.0
+        volume = max(0.0, min(10.0, volume))
+        sons[tipo_int] = (os.path.join(pasta_base, caminho_rel), raio, volume)
+    return sons
+
+
 PARTICLE_FLOAT_AMPLITUDE = 0.18
 PARTICLE_SCALE = 0.35
 PARTICLE_OFFSET_Y = 0.0
@@ -379,7 +397,7 @@ def _particle_instances(particle_cells, particle_defs):
             px = cx + math.cos(ang) * r
             py = cy + math.sin(ang) * r
             out.append((px, py, caminho_abs, offset_y, escala,
-                         PARTICLE_FLOAT_AMPLITUDE, velocidade, fase))
+                         PARTICLE_FLOAT_AMPLITUDE, velocidade, fase, AI_NONE, 0.0))
     return out
 
 
@@ -403,6 +421,7 @@ def load_rcfg(caminho):
     lights = {ORB_MIN + (n - 1): v for n, v in lights.items() if 1 <= n <= 9}
 
     billboard_defs = _parse_billboards(dados.get("BILLBOARDS", {}), pasta_base)
+    billboard_sound_defs = _parse_billboard_sounds(dados.get("BILLBOARD_SOUNDS", {}), pasta_base)
     billboard_instances = [
         (x, y, billboard_defs[tipo][0], billboard_defs[tipo][1], billboard_defs[tipo][2], 0.0, 0.0, 0.0, billboard_defs[tipo][3], billboard_defs[tipo][4])
         for (x, y, tipo) in billboard_cells
@@ -414,7 +433,11 @@ def load_rcfg(caminho):
     bb_completo = billboard_instances + particle_instances
     bb_ai = []
     ai_cells = set()
-    for (x, y, _c, _o, _e, _a, _v, _f, ai, speed) in billboard_instances:
+    bb_sounds = []
+    for (x, y, tipo) in billboard_cells:
+        if tipo not in billboard_defs:
+            continue
+        _caminho, _off, _esc, ai, speed = billboard_defs[tipo]
         bb_ai.append({
             "x": x, "y": y, "ai": ai, "state": "IDLE",
             "spawn_x": x, "spawn_y": y, "speed": speed,
@@ -422,6 +445,11 @@ def load_rcfg(caminho):
         if ai != AI_NONE:
             ci, cj = int(x), int(y)
             ai_cells.add((ci, cj))
+        snd = billboard_sound_defs.get(tipo)
+        if snd is not None:
+            bb_sounds.append({"path": snd[0], "radius": snd[1], "volume": snd[2], "channel": None})
+        else:
+            bb_sounds.append(None)
 
     return {
         "config": _parse_config(dados.get("CONFIG", {})),
@@ -436,6 +464,7 @@ def load_rcfg(caminho):
         "textures": texturas_abs,
         "billboards": bb_completo,
         "bb_ai": bb_ai,
+        "bb_sounds": bb_sounds,
         "ai_cells": ai_cells,
         "billboard_cells": billboard_cells,
         "particle_cells": particle_cells,
@@ -540,6 +569,12 @@ GAME_OVER = False
 GAME_OVER_START = 0.0
 overlay_prog: "moderngl.Program | None" = None
 overlay_vao: "moderngl.VertexArray | None" = None
+
+# ── Som posicional estéreo dos billboards ──
+BB_SOUND = []
+ACTIVE_SOUND_CHANNELS = []
+WALL_ATTEN = 0.45
+SOUND_MIXER_INIT = False
 
 # ── Contexto e texturas do renderer ──
 ctx: "moderngl.Context | None" = None
@@ -784,6 +819,116 @@ def open_cell(cx, cy):
 
 def in_map(x, y):
     return 0 <= x < MAP_W and 0 <= y < MAP_H
+
+
+# ══ SOM POSICIONAL ESTÉREO (billboards) ═══════════════════════════
+def _count_walls_between(x0, y0, x1, y1):
+    dx, dy = x1 - x0, y1 - y0
+    dist = math.hypot(dx, dy)
+    if dist <= 1e-6:
+        return 0
+    steps = max(1, int(dist / 0.1))
+    count = 0
+    prev_wall = False
+    for s in range(0, steps + 1):
+        t = s / steps
+        ix, iy = int(x0 + dx * t), int(y0 + dy * t)
+        if not (0 <= ix < MAP_W and 0 <= iy < MAP_H):
+            is_w = False
+        else:
+            is_w = is_wall(MAP[iy][ix])
+        if is_w and not prev_wall:
+            count += 1
+        prev_wall = is_w
+    return count
+
+
+def _ensure_mixer():
+    global SOUND_MIXER_INIT
+    if not SOUND_MIXER_INIT:
+        try:
+            pygame.mixer.init(frequency=44100, size=-16, channels=2)
+            pygame.mixer.set_num_channels(64)
+            SOUND_MIXER_INIT = True
+        except Exception as e:
+            print(f"[som] falha ao iniciar mixer: {e}", flush=True)
+            SOUND_MIXER_INIT = False
+
+
+def stop_billboard_sounds():
+    global ACTIVE_SOUND_CHANNELS
+    for chan in ACTIVE_SOUND_CHANNELS:
+        try:
+            chan.stop()
+        except Exception:
+            pass
+    ACTIVE_SOUND_CHANNELS = []
+
+
+def start_billboard_sounds(bb_sounds):
+    global ACTIVE_SOUND_CHANNELS
+    stop_billboard_sounds()
+    _ensure_mixer()
+    if not SOUND_MIXER_INIT:
+        return
+    for entry in bb_sounds:
+        if entry is None:
+            continue
+        try:
+            snd = pygame.mixer.Sound(entry["path"])
+        except Exception as e:
+            print(f"[som] não foi possível carregar {entry['path']!r}: {e}", flush=True)
+            continue
+        try:
+            vol = float(entry["volume"])
+        except (TypeError, ValueError):
+            vol = 1.0
+        vol = max(0.0, min(10.0, vol))
+        if vol > 1.0:
+            try:
+                raw = snd.get_raw()
+                samples = np.frombuffer(raw, dtype="<i2").astype(np.float32)
+                samples = np.clip(samples * vol, -32768.0, 32767.0)
+                snd = pygame.mixer.Sound(samples.astype("<i2").tobytes())
+            except Exception as e:
+                print(f"[som] falha ao amplificar {entry['path']!r}: {e}", flush=True)
+        try:
+            chan = snd.play(loops=-1)
+        except Exception as e:
+            print(f"[som] falha ao tocar {entry['path']!r}: {e}", flush=True)
+            continue
+        if chan is None:
+            continue
+        entry["channel"] = chan
+        ACTIVE_SOUND_CHANNELS.append(chan)
+
+
+def update_billboard_sounds(px, py, pangle):
+    if not SOUND_MIXER_INIT or not BB_SOUND:
+        return
+    for idx, entry in enumerate(BB_SOUND):
+        if entry is None:
+            continue
+        chan = entry.get("channel")
+        if chan is None:
+            continue
+        if idx >= len(BILLBOARDS):
+            continue
+        bx, by = BILLBOARDS[idx][0], BILLBOARDS[idx][1]
+        dx, dy = bx - px, by - py
+        dist = math.hypot(dx, dy)
+        raio = entry["radius"]
+        if dist > raio or dist < 1e-6:
+            chan.set_volume(0.0, 0.0)
+            continue
+        r_fall = max(0.0, min(1.0, 1.0 - dist / raio))
+        wall_count = _count_walls_between(bx, by, px, py)
+        w_fall = WALL_ATTEN ** wall_count
+        atten = r_fall * w_fall
+        rx, ry = -math.sin(pangle), math.cos(pangle)
+        proj = (dx * rx + dy * ry) / max(dist, 1e-3)
+        pan = max(-1.0, min(1.0, proj))
+        chan.set_volume(atten * (0.5 - 0.5 * pan), atten * (0.5 + 0.5 * pan))
 
 
 # ══ PATHFINDING (Wavefront / BFS) ═════════════════════════════
@@ -1450,7 +1595,7 @@ def load_map_file(caminho, preserve_position=False):
     global BILLBOARDS, WALL_SCALE, LIGHT_CELLS
     global SKY, SKY_TIME, SKY_PAUSED
     global BILLBOARD_CELLS, PARTICLE_CELLS, BB_AI, AI_BB_CELLS
-    global GAME_OVER, GAME_OVER_START
+    global GAME_OVER, GAME_OVER_START, BB_SOUND
     data = load_rcfg(caminho)
     cfg = data["config"]
     WIDTH, HEIGHT = cfg["window_width"], cfg["window_height"]
@@ -1505,6 +1650,8 @@ def load_map_file(caminho, preserve_position=False):
     compute_light_grid(on_progress=progress_cb)
     resize_window(WIDTH, HEIGHT)
     upload_textures()
+    BB_SOUND = data["bb_sounds"]
+    start_billboard_sounds(BB_SOUND)
     print(f"Mapa: {data['info'].get('name', caminho)}", flush=True)
 
 
@@ -1719,6 +1866,9 @@ def main():
                 ai["x"], ai["y"] = bx, by
                 old = BILLBOARDS[idx]
                 BILLBOARDS[idx] = (bx, by, old[2], old[3], old[4], old[5], old[6], old[7], old[8], old[9])
+
+        if not GAME_OVER:
+            update_billboard_sounds(px, py, pangle)
 
         aspect = (WIDTH / HEIGHT) if HEIGHT else 1.0
         plane_len = math.tan(FOV / 2) * aspect
