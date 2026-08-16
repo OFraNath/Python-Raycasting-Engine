@@ -177,10 +177,10 @@ Os tokens opcionais `ai_type` e `speed` transformam o billboard num agente que s
 
 ### 5.1 IA dos Billboards (FSM + Pathfinding)
 
-Um billboard com `ai_type` diferente de `none` vira um agente que navega o labirinto usando uma **máquina de estados (FSM)** acoplada a um **pathfinding por onda (BFS / wavefront)**:
+Um billboard com `ai_type` diferente de `none` vira um agente que navega o mapa usando uma **máquina de estados (FSM)** acoplada a um **pathfinding por onda (BFS / wavefront)**:
 
 - **Amigável (`friendly`)** — FSM `FOLLOW → STAY_CLOSE`: segue o jogador e para a ~1,2 de distância, orbitando suavemente. Não causa dano.
-- **Inimigo (`enemy`)** — FSM `CHASE → GAME_OVER_TRIGGER`: persegue o jogador pelo labirinto. A engine calcula uma grade de distâncias a partir da posição do jogador (BFS) e o inimigo desce o gradiente, contornando paredes; quando está na mesma célula, faz *homing* direto para não travar.
+- **Inimigo (`enemy`)** — FSM `CHASE → GAME_OVER_TRIGGER`: persegue o jogador pelo mapa. A engine calcula uma grade de distâncias a partir da posição do jogador (BFS) e o inimigo desce o gradiente, contornando paredes; quando está na mesma célula, faz *homing* direto para não travar.
 
 **Game Over:** se o inimigo encosta no jogador (`dist < 0,5`), surge uma tela **"GAME OVER"** por 2 segundos e o mapa é restaurado (jogador e billboards com IA voltam ao seu spawn original).
 
