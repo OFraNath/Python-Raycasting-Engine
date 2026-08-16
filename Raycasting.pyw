@@ -324,7 +324,16 @@ def _parse_billboards(d, pasta_base):
         ai = partes[3].strip().lower() if len(partes) >= 4 and partes[3] else AI_NONE
         if ai not in _AI_VALIDOS:
             ai = AI_NONE
-        billboards[tipo_int] = (os.path.join(pasta_base, caminho_rel), offset_y, escala, ai)
+        if len(partes) >= 5 and partes[4]:
+            try:
+                speed = float(partes[4])
+            except ValueError:
+                speed = None
+        else:
+            speed = None
+        if speed is None or speed <= 0:
+            speed = AI_ENEMY_SPEED if ai == AI_ENEMY else AI_FRIENDLY_SPEED
+        billboards[tipo_int] = (os.path.join(pasta_base, caminho_rel), offset_y, escala, ai, speed)
     return billboards
 
 
@@ -395,7 +404,7 @@ def load_rcfg(caminho):
 
     billboard_defs = _parse_billboards(dados.get("BILLBOARDS", {}), pasta_base)
     billboard_instances = [
-        (x, y, billboard_defs[tipo][0], billboard_defs[tipo][1], billboard_defs[tipo][2], 0.0, 0.0, 0.0, billboard_defs[tipo][3])
+        (x, y, billboard_defs[tipo][0], billboard_defs[tipo][1], billboard_defs[tipo][2], 0.0, 0.0, 0.0, billboard_defs[tipo][3], billboard_defs[tipo][4])
         for (x, y, tipo) in billboard_cells
         if tipo in billboard_defs
     ]
@@ -404,11 +413,15 @@ def load_rcfg(caminho):
 
     bb_completo = billboard_instances + particle_instances
     bb_ai = []
-    for (x, y, _c, _o, _e, _a, _v, _f, ai) in billboard_instances:
+    ai_cells = set()
+    for (x, y, _c, _o, _e, _a, _v, _f, ai, speed) in billboard_instances:
         bb_ai.append({
             "x": x, "y": y, "ai": ai, "state": "IDLE",
-            "spawn_x": x, "spawn_y": y,
+            "spawn_x": x, "spawn_y": y, "speed": speed,
         })
+        if ai != AI_NONE:
+            ci, cj = int(x), int(y)
+            ai_cells.add((ci, cj))
 
     return {
         "config": _parse_config(dados.get("CONFIG", {})),
@@ -423,6 +436,7 @@ def load_rcfg(caminho):
         "textures": texturas_abs,
         "billboards": bb_completo,
         "bb_ai": bb_ai,
+        "ai_cells": ai_cells,
         "billboard_cells": billboard_cells,
         "particle_cells": particle_cells,
         "light_cells": light_cells,
@@ -521,6 +535,7 @@ tex_mmFlags: "moderngl.Texture | None" = None
 # ── IA dos billboards (FSM + pathfinding) ──
 AI_FRIENDLY_SPEED = 0.035
 AI_ENEMY_SPEED = 0.05
+AI_BB_CELLS = set()
 GAME_OVER = False
 GAME_OVER_START = 0.0
 overlay_prog: "moderngl.Program | None" = None
@@ -818,6 +833,14 @@ def _step_ai(bx, by, dist_grid, speed):
     return bx + ddx / d * speed, by + ddy / d * speed
 
 
+def _step_toward(bx, by, tx, ty, speed):
+    ddx, ddy = tx - bx, ty - by
+    d = math.hypot(ddx, ddy)
+    if d <= speed or d < 1e-6:
+        return tx, ty
+    return bx + ddx / d * speed, by + ddy / d * speed
+
+
 # ══ SHADERS (GLSL 330) ═════════════════════════════════════════
 VERT = """
 #version 330 core
@@ -861,6 +884,7 @@ uniform float u_bbScale[128];
 uniform float u_bbAmp[128];
 uniform float u_bbVel[128];
 uniform float u_bbPhase[128];
+uniform float u_bbAI[128];
 uniform float u_time;
 uniform sampler2DArray u_bbTex;
 uniform sampler2D u_mmFlags;
@@ -1135,6 +1159,15 @@ void main() {
         if (d < 3.5) color = u_mmPlayer;
         float dd = length(pix - u_dirPix);
         if (dd < 2.5) color = u_mmPlayer;
+        for (int b = 0; b < u_bbCount && b < 128; b++) {
+            if (u_bbAI[b] < 0.5) continue;
+            vec2 bbPix = u_mmPos + u_bbPos[b] * u_mmCell;
+            float bbd = length(pix - bbPix);
+            if (bbd < 3.5) {
+                color = (u_bbAI[b] < 1.5) ? vec3(0.878, 0.643, 0.345)
+                                          : vec3(0.79, 0.34, 0.31);
+            }
+        }
     }
     outColor = vec4(color, 1.0);
 }
@@ -1248,7 +1281,7 @@ def resize_window(width, height):
 
 def init_display():
     global ctx, prog, vao, tex_map, tex_light, tex_palA, tex_palB, tex_wallArr, tex_hasTex
-    global tex_bbTex
+    global tex_bbTex, overlay_prog, overlay_vao
     ctx = None
     pygame.init()
     resize_window(WIDTH, HEIGHT)
@@ -1343,7 +1376,8 @@ def upload_textures():
     for (cx, cy, _tipo) in BILLBOARD_CELLS:
         ix, iy = int(cx), int(cy)
         if 0 <= ix < MAP_W and 0 <= iy < MAP_H:
-            mm_flags[iy, ix] |= 2
+            if (ix, iy) not in AI_BB_CELLS:
+                mm_flags[iy, ix] |= 2
     for (cx, cy, _tipo) in PARTICLE_CELLS:
         ix, iy = int(cx), int(cy)
         if 0 <= ix < MAP_W and 0 <= iy < MAP_H:
@@ -1393,7 +1427,7 @@ def upload_textures():
     tex_hasTex.filter = (moderngl.NEAREST, moderngl.NEAREST)
 
     bb_camadas = np.zeros((BILLBOARD_LAYERS, tam[1], tam[0], 4), dtype=np.uint8)
-    caminhos_billboards = sorted({caminho for (_, _, caminho, _, _, _, _, _, _) in BILLBOARDS})[:BILLBOARD_LAYERS]
+    caminhos_billboards = sorted({caminho for (_, _, caminho, _, _, _, _, _, _, _) in BILLBOARDS})[:BILLBOARD_LAYERS]
     aspects_billboards = [1.0] * BILLBOARD_LAYERS
     for idx, caminho_abs in enumerate(caminhos_billboards):
         arr, aspect = load_asset_image(caminho_abs, tam, contain=True)
@@ -1415,7 +1449,7 @@ def load_map_file(caminho, preserve_position=False):
     global MOUSE_SENS_Y, MAX_LOOK_Y, MM, SPAWN, px, py, pangle, look_y
     global BILLBOARDS, WALL_SCALE, LIGHT_CELLS
     global SKY, SKY_TIME, SKY_PAUSED
-    global BILLBOARD_CELLS, PARTICLE_CELLS, BB_AI
+    global BILLBOARD_CELLS, PARTICLE_CELLS, BB_AI, AI_BB_CELLS
     global GAME_OVER, GAME_OVER_START
     data = load_rcfg(caminho)
     cfg = data["config"]
@@ -1460,6 +1494,7 @@ def load_map_file(caminho, preserve_position=False):
     PARTICLE_CELLS = data["particle_cells"]
     LIGHT_CELLS = data["light_cells"]
     BB_AI = data["bb_ai"]
+    AI_BB_CELLS = data["ai_cells"]
     GAME_OVER = False
     GAME_OVER_START = 0.0
 
@@ -1503,7 +1538,7 @@ def reset_after_game_over():
         ai["y"] = ai["spawn_y"]
         ai["state"] = "IDLE"
         old = BILLBOARDS[idx]
-        BILLBOARDS[idx] = (ai["x"], ai["y"], old[2], old[3], old[4], old[5], old[6], old[7], old[8])
+        BILLBOARDS[idx] = (ai["x"], ai["y"], old[2], old[3], old[4], old[5], old[6], old[7], old[8], old[9])
 
 
 def main():
@@ -1667,7 +1702,7 @@ def main():
                 if ai["ai"] == AI_FRIENDLY:
                     if eudist > 1.2:
                         ai["state"] = "FOLLOW"
-                        bx, by = _step_ai(bx, by, dist_grid, AI_FRIENDLY_SPEED * (dt * 60.0))
+                        bx, by = _step_ai(bx, by, dist_grid, ai["speed"] * (dt * 60.0))
                     else:
                         ai["state"] = "STAY_CLOSE"
                 else:  # AI_ENEMY
@@ -1677,10 +1712,13 @@ def main():
                         GAME_OVER_START = time_sec()
                     else:
                         ai["state"] = "CHASE"
-                        bx, by = _step_ai(bx, by, dist_grid, AI_ENEMY_SPEED * (dt * 60.0))
+                        if eudist < 1.0:
+                            bx, by = _step_toward(bx, by, px, py, ai["speed"] * (dt * 60.0))
+                        else:
+                            bx, by = _step_ai(bx, by, dist_grid, ai["speed"] * (dt * 60.0))
                 ai["x"], ai["y"] = bx, by
                 old = BILLBOARDS[idx]
-                BILLBOARDS[idx] = (bx, by, old[2], old[3], old[4], old[5], old[6], old[7], old[8])
+                BILLBOARDS[idx] = (bx, by, old[2], old[3], old[4], old[5], old[6], old[7], old[8], old[9])
 
         aspect = (WIDTH / HEIGHT) if HEIGHT else 1.0
         plane_len = math.tan(FOV / 2) * aspect
@@ -1744,7 +1782,8 @@ def main():
         bb_amp = [0.0] * MAX_BILLBOARD_INSTANCES
         bb_vel = [0.0] * MAX_BILLBOARD_INSTANCES
         bb_phase = [0.0] * MAX_BILLBOARD_INSTANCES
-        for idx, (bx, by, caminho_abs, yoff, escala, amp, vel, fase, _ai) in enumerate(bb_instances):
+        bb_ai_type = [0.0] * MAX_BILLBOARD_INSTANCES
+        for idx, (bx, by, caminho_abs, yoff, escala, amp, vel, fase, _ai, _sp) in enumerate(bb_instances):
             bb_pos[idx] = (bx, by)
             bb_layer[idx] = float(_BB_LAYER_BY_PATH.get(caminho_abs, 0))
             bb_yoff[idx] = yoff
@@ -1753,6 +1792,9 @@ def main():
             bb_amp[idx] = amp
             bb_vel[idx] = vel
             bb_phase[idx] = fase
+            if idx < len(BB_AI):
+                ai = BB_AI[idx]["ai"]
+                bb_ai_type[idx] = 2.0 if ai == AI_ENEMY else (1.0 if ai == AI_FRIENDLY else 0.0)
         prog["u_bbCount"] = len(bb_instances)
         prog["u_bbPos"] = bb_pos
         prog["u_bbLayer"] = bb_layer
@@ -1762,6 +1804,7 @@ def main():
         prog["u_bbAmp"] = bb_amp
         prog["u_bbVel"] = bb_vel
         prog["u_bbPhase"] = bb_phase
+        prog["u_bbAI"] = bb_ai_type
         prog["u_time"] = time_sec() - t_start
 
         prog["u_mmPos"] = (mm_x, mm_y)
