@@ -73,7 +73,7 @@ python Raycasting.pyw showcase.rcfg
 
 Um mapa é um arquivo de texto com extensão `.rcfg`. Ele tem seções (entre `[COLCHETES]`) e uma grade de células em `[MAP]`. Siga o passo a passo abaixo — cada bloco é uma seção real que a engine entende.
 
-> **Regra de ouro dos caminhos:** a engine resolve os caminhos de imagens **relativos à pasta do próprio `.rcfg`**. O mapa de exemplo [`showcase.rcfg`](./showcase.rcfg) usa a pasta [`assets/`](./assets) na raiz do projeto; se você criar seus próprios mapas, pode organizá-los como preferir (uma `sprites/` ao lado do arquivo funciona bem para mapas portáteis).
+> **Regra de ouro dos caminhos:** a engine resolve os caminhos de imagens **relativos à pasta do próprio `.rcfg`**. Siga o padrão do mapa de exemplo [`showcase.rcfg`](./showcase.rcfg) e coloque suas imagens na pasta [`assets/`](./assets) na raiz do projeto (referenciada como `assets/imagem.png` no `.rcfg`).
 
 ### 1. Esqueleto do arquivo
 
@@ -124,7 +124,7 @@ Para textura em vez de cor, use `[TEXTURES]` (a imagem entra em espaço sRGB, co
 
 ```ini
 [TEXTURES]
-1 sprites/tijolo.png
+1 assets/tijolo.png
 ```
 
 Um tipo de parede pode estar só em `[TEXTURES]`, só em `[COLORS]`, ou nos dois (textura com cor de reserva).
@@ -155,8 +155,8 @@ Sprites 2D que sempre encaram a câmera e recebem oclusão correta das paredes. 
 
 ```ini
 [BILLBOARDS]
-1 sprites/vaso_planta.png 0
-2 sprites/orbe_flutuante.png 0.9 1.5
+1 assets/vaso_planta.png 0
+2 assets/orbe_flutuante.png 0.9 1.5
 ```
 
 ```ini
@@ -176,7 +176,7 @@ Igual a billboard, mas gera várias instâncias flutuantes espalhadas pela célu
 
 ```ini
 [PARTICLES]
-1 sprites/orbe_flutuante.png 8 0.6 4
+1 assets/orbe_flutuante.png 8 0.6 4
 ```
 
 ```ini
@@ -318,7 +318,7 @@ Sintaxe: `ID COR_FACES_NORTE_SUL COR_FACES_LESTE_OESTE`
 Sintaxe: `ID caminho/relativo/imagem.png` (relativo à pasta do `.rcfg`)
 
 ```
-1 texturas/tijolo.png
+1 assets/tijolo.png
 ```
 
 Se a imagem não existir, a engine usa um **xadrez magenta/preto** (textura de erro) em vez de travar — você vê na hora qual caminho está errado.
@@ -350,8 +350,8 @@ O horário também se controla em tempo real com `,` `.` e `P`.
 Sintaxe: `ID caminho/relativo/imagem.png offset_y [escala]` (índices `1` a `9`, usados como `B1`..`B9`)
 
 ```
-1 sprites/vaso_planta.png 0.0
-2 sprites/orbe_flutuante.png 0.9 1.5
+1 assets/vaso_planta.png 0.0
+2 assets/orbe_flutuante.png 0.9 1.5
 ```
 
 `offset_y` é a elevação em blocos em relação ao chão (`0.0` = no chão; valores maiores = flutuando). `escala` (padrão `1.0`) multiplica o sprite, que ocupa 1 unidade de altura. Cada célula com `B#` é atravessável e sempre encara a câmera, com oclusão correta contra as paredes.
@@ -361,7 +361,7 @@ Sintaxe: `ID caminho/relativo/imagem.png offset_y [escala]` (índices `1` a `9`,
 Sintaxe: `ID caminho/relativo/imagem.png quantidade velocidade espalhamento` (índices `1` a `9`, usados como `P1`..`P9`)
 
 ```
-1 sprites/orbe_flutuante.png 8 0.6 4
+1 assets/orbe_flutuante.png 8 0.6 4
 ```
 
 `quantidade` (padrão `8`) = instâncias por célula, `velocidade` (padrão `0.5`) = rapidez do movimento, `espalhamento` (padrão `0.4`) = raio de dispersão ao redor do ponto central. O flutuar vertical é animado automaticamente.
@@ -390,7 +390,7 @@ angle 0
 2 #882222 #661111
 
 [TEXTURES]
-1 texturas/parede_pedra.png
+1 assets/parede_pedra.png
 
 [LIGHTS]
 1 #ffaa44 5.0
@@ -447,7 +447,7 @@ RAYCASTING-ENGINE/
     └── youtube.webp
 ```
 
-> **Dica de organização:** para seus próprios mapas, uma boa prática é manter cada mapa em uma pasta própria com os sprites em `sprites/` ao lado do `.rcfg`. Assim o mapa fica **portátil**: copie a pasta inteira para qualquer lugar e ele continua funcionando.
+> **Dica de organização:** o projeto usa uma pasta [`assets/`](./assets) central na raiz, compartilhada por todos os mapas — é o padrão usado pelo `showcase.rcfg` e o recomendado para novos mapas. Como os caminhos no `.rcfg` são relativos ao próprio arquivo, isso significa que mapas na raiz do projeto referenciam as imagens como `assets/imagem.png`.
 
 ---
 
