@@ -321,6 +321,7 @@ def _parse_billboards(d, pasta_base):
 
 PARTICLE_FLOAT_AMPLITUDE = 0.18
 PARTICLE_SCALE = 0.35
+PARTICLE_OFFSET_Y = 0.0
 
 
 def _parse_particles(d, pasta_base):
@@ -337,8 +338,11 @@ def _parse_particles(d, pasta_base):
         quantidade = int(partes[1]) if len(partes) >= 2 and partes[1] else 8
         velocidade = float(partes[2]) if len(partes) >= 3 and partes[2] else 0.5
         espalhamento = float(partes[3]) if len(partes) >= 4 and partes[3] else 0.4
+        offset_y = float(partes[4]) if len(partes) >= 5 and partes[4] else PARTICLE_OFFSET_Y
+        escala = float(partes[5]) if len(partes) >= 6 and partes[5] else PARTICLE_SCALE
         particles[tipo_int] = (os.path.join(pasta_base, caminho_rel), max(0, quantidade),
-                                velocidade, max(0.0, espalhamento))
+                                velocidade, max(0.0, espalhamento),
+                                offset_y, max(0.0, escala))
     return particles
 
 
@@ -347,7 +351,7 @@ def _particle_instances(particle_cells, particle_defs):
     for (cx, cy, tipo) in particle_cells:
         if tipo not in particle_defs:
             continue
-        caminho_abs, quantidade, velocidade, raio = particle_defs[tipo]
+        caminho_abs, quantidade, velocidade, raio, offset_y, escala = particle_defs[tipo]
         for k in range(quantidade):
             seed = (int(cx * 2) * 7349 + int(cy * 2) * 4519 + k * 131) & 0xFFFFFFFF
             rng = np.random.RandomState(seed)
@@ -356,7 +360,7 @@ def _particle_instances(particle_cells, particle_defs):
             fase = rng.uniform(0.0, 2.0 * math.pi)
             px = cx + math.cos(ang) * r
             py = cy + math.sin(ang) * r
-            out.append((px, py, caminho_abs, 0.0, PARTICLE_SCALE,
+            out.append((px, py, caminho_abs, offset_y, escala,
                          PARTICLE_FLOAT_AMPLITUDE, velocidade, fase))
     return out
 
@@ -401,6 +405,8 @@ def load_rcfg(caminho):
         "lights": lights,
         "textures": texturas_abs,
         "billboards": billboard_instances + particle_instances,
+        "billboard_cells": billboard_cells,
+        "particle_cells": particle_cells,
         "light_cells": light_cells,
     }
 
@@ -483,6 +489,8 @@ SPAWN = (1.5, 1.5, 0.0)
 
 # ── Billboards e partículas ──
 BILLBOARDS = []
+BILLBOARD_CELLS = []
+PARTICLE_CELLS = []
 MAX_BILLBOARD_INSTANCES = 128
 BILLBOARD_LAYERS = 9
 _BB_LAYER_BY_PATH = {}
@@ -812,9 +820,6 @@ vec3 palColor(float t, int useA) {
 float hasWallTex(float t) {
     return texture(u_hasTex, vec2((t + 0.5) / 256.0, 0.5)).r;
 }
-vec3 wallTexColor(float t, vec2 uvFace) {
-    return texture(u_wallTex, vec3(uvFace, t - 1.0)).rgb;
-}
 float starHash(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
 }
@@ -887,19 +892,39 @@ void main() {
     int wtype = 0;
     int side = 0;
     bool hit = false;
-    int it = 0;
     int maxIt = int(u_depth) + 4;
-    while (!hit && it < maxIt) {
+    float perpDist = 0.0;
+    float texU = 0.0;
+    for (int it = 0; it < maxIt; it++) {
         if (sideDist.x < sideDist.y) { sideDist.x += delta.x; mapPos.x += float(step.x); side = 0; }
         else                          { sideDist.y += delta.y; mapPos.y += float(step.y); side = 1; }
         if (mapPos.x < 0.0 || mapPos.x >= u_mapSize.x || mapPos.y < 0.0 || mapPos.y >= u_mapSize.y) break;
         int t = cellType(mapPos);
-        if (t >= 1 && t <= int(u_wallMax)) { hit = true; wtype = t; }
-        it++;
+        if (t >= 1 && t <= int(u_wallMax)) {
+            float pd = (side == 0) ? (sideDist.x - delta.x) : (sideDist.y - delta.y);
+            float lineH = u_scale / pd;
+            float wTop = horizon - lineH * 0.5;
+            float wBot = horizon + lineH * 0.5;
+            if (row >= wTop && row <= wBot) {
+                float tV = clamp((row - wTop) / max(1.0, wBot - wTop), 0.0, 1.0);
+                vec2 hitWorld = u_pos + pd * rayDir;
+                float tU = fract((side == 0) ? hitWorld.y : hitWorld.x);
+                float alpha = 1.0;
+                if (hasWallTex(float(t)) > 0.5) {
+                    alpha = textureLod(u_wallTex, vec3(vec2(tU, tV), float(t) - 1.0), 0.0).a;
+                }
+                if (alpha > 0.5) {
+                    hit = true;
+                    wtype = t;
+                    perpDist = pd;
+                    texU = tU;
+                    break;
+                }
+            }
+        }
     }
     vec3 color;
     if (hit) {
-        float perpDist = (side == 0) ? (sideDist.x - delta.x) : (sideDist.y - delta.y);
         vec3 wcol = (side == 1) ? palColor(float(wtype), 1) : palColor(float(wtype), 0);
         vec2 hitWorld = u_pos + perpDist * rayDir;
         vec2 faceNormal = (side == 0) ? vec2(-float(step.x), 0.0) : vec2(0.0, -float(step.y));
@@ -907,7 +932,6 @@ void main() {
         wallSample = clamp(wallSample, vec2(0.02), u_mapSize - vec2(0.02));
         vec3 lightv = lightAt(wallSample);
         float fogv = clamp((u_fog * perpDist) / u_depth, 0.0, 1.0);
-        float texU = fract((side == 0) ? hitWorld.y : hitWorld.x);
         float hasTexFlag = hasWallTex(float(wtype));
         float lineH = u_scale / perpDist;
         float wallTop = horizon - lineH * 0.5;
@@ -916,11 +940,12 @@ void main() {
             float texV = clamp((row - wallTop) / max(1.0, wallBottom - wallTop), 0.0, 1.0);
             vec3 wcolFinal;
             if (hasTexFlag > 0.5) {
-                vec3 texColor = wallTexColor(float(wtype), vec2(texU, texV));
-                texColor = pow(texColor, vec3(2.2));
+                vec4 texSample = texture(u_wallTex, vec3(vec2(texU, texV), float(wtype) - 1.0));
                 vec3 dynamicLight = lightv / (lightv + vec3(1.0));
-                vec3 litTex = texColor * dynamicLight * 2.2;
-                wcolFinal = pow(litTex, vec3(1.0 / 2.2));
+                vec3 litBase = wcol * dynamicLight * 1.5;
+                vec3 texColor = pow(texSample.rgb, vec3(2.2));
+                vec3 litTex = pow(texColor * dynamicLight * 2.2, vec3(1.0 / 2.2));
+                wcolFinal = mix(litBase, litTex, texSample.a);
             } else {
                 vec3 dynamicLight = lightv / (lightv + vec3(1.0));
                 wcolFinal = wcol * dynamicLight * 1.5;
@@ -1218,8 +1243,12 @@ def upload_textures():
             elif is_orb(t):
                 f |= 4
             mm_flags[y, x] = f
-    for (bx, by, _caminho, _yoff, _escala, _amp, _vel, _fase) in BILLBOARDS:
-        ix, iy = int(bx), int(by)
+    for (cx, cy, _tipo) in BILLBOARD_CELLS:
+        ix, iy = int(cx), int(cy)
+        if 0 <= ix < MAP_W and 0 <= iy < MAP_H:
+            mm_flags[iy, ix] |= 2
+    for (cx, cy, _tipo) in PARTICLE_CELLS:
+        ix, iy = int(cx), int(cy)
         if 0 <= ix < MAP_W and 0 <= iy < MAP_H:
             mm_flags[iy, ix] |= 2
     tex_mmFlags = ctx.texture((MAP_W, MAP_H), 1, mm_flags.tobytes(), dtype="f1")
@@ -1289,6 +1318,7 @@ def load_map_file(caminho, preserve_position=False):
     global MOUSE_SENS_Y, MAX_LOOK_Y, MM, SPAWN, px, py, pangle, look_y
     global BILLBOARDS, WALL_SCALE, LIGHT_CELLS
     global SKY, SKY_TIME, SKY_PAUSED
+    global BILLBOARD_CELLS, PARTICLE_CELLS
     data = load_rcfg(caminho)
     cfg = data["config"]
     WIDTH, HEIGHT = cfg["window_width"], cfg["window_height"]
@@ -1328,6 +1358,8 @@ def load_map_file(caminho, preserve_position=False):
         px, py, pangle = SPAWN
         look_y = 0
     BILLBOARDS = data["billboards"]
+    BILLBOARD_CELLS = data["billboard_cells"]
+    PARTICLE_CELLS = data["particle_cells"]
     LIGHT_CELLS = data["light_cells"]
 
     big_map = (MAP_W * MAP_H) >= LOADING_SCREEN_THRESHOLD_CELLS

@@ -188,7 +188,7 @@ Igual a billboard, mas gera várias instâncias flutuantes espalhadas pela célu
 1 1 1 1 1
 ```
 
-Sintaxe: `ID caminho quantidade velocidade espalhamento`.
+Sintaxe: `ID caminho quantidade velocidade espalhamento offset_y escala`.
 
 ### 7. Céu dinâmico (opcional)
 

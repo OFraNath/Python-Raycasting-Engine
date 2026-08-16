@@ -163,7 +163,7 @@ const DEFAULT_WALL_COLORS = ["#7a6a55","#5590c8","#4caf6b","#c85a8a","#9a6ac8","
   "#c8b45a","#5ac8b0","#c85a5a"];
 const DEFAULT_SKY = {enabled:false, cycle:false, day_length:120, start_time:8,
   sun_peak:45, sun_color:"#fff2c0", moon_color:"#b9c6e0", stars:140};
-const DEFAULT_PARTICLE = ["", 8, 0.5, 0.4];
+const DEFAULT_PARTICLE = ["", 8, 0.5, 0.4, 0.0, 1.0];
 
 function blankMap(rows, cols){
   const g = [];
@@ -376,7 +376,9 @@ function loadRcfg(text){
     const quantidade = partes[1] ? parseInt(partes[1]) : DEFAULT_PARTICLE[1];
     const velocidade = partes[2] ? parseFloat(partes[2]) : DEFAULT_PARTICLE[2];
     const espalhamento = partes[3] ? parseFloat(partes[3]) : DEFAULT_PARTICLE[3];
-    if(caminho) s.particles[parseInt(tipo)] = [caminho, quantidade, velocidade, espalhamento];
+    const offsetY = partes[4] ? parseFloat(partes[4]) : DEFAULT_PARTICLE[4];
+    const escala = partes[5] ? parseFloat(partes[5]) : DEFAULT_PARTICLE[5];
+    if(caminho) s.particles[parseInt(tipo)] = [caminho, quantidade, velocidade, espalhamento, offsetY, escala];
   }
 
   return s;
@@ -481,8 +483,8 @@ function serializeRcfg(s){
   if(particleKeys.length){
     L.push("[PARTICLES]");
     for(const n of particleKeys){
-      const [path, qty, vel, spread] = s.particles[n];
-      if(path) L.push(`${n} ${path} ${qty} ${vel} ${spread}`);
+      const [path, qty, vel, spread, offsetY, escala] = s.particles[n];
+      if(path) L.push(`${n} ${path} ${qty} ${vel} ${spread} ${offsetY ?? 0.0} ${escala ?? 1.0}`);
     }
     L.push("");
   }
@@ -1262,7 +1264,7 @@ function panelBillboards(root){
 
 function panelParticles(root){
   const hint = document.createElement("div"); hint.className="hint";
-  hint.textContent = "Caminho da imagem + quantidade de instâncias, velocidade de flutuar e raio de espalhamento (mesmos campos do [PARTICLES] da engine).";
+  hint.textContent = "Caminho da imagem + quantidade de instâncias, velocidade de flutuar, raio de espalhamento, offset vertical e escala (mesmos campos do [PARTICLES] da engine).";
   root.appendChild(hint);
 
   for(let n=1;n<=9;n++){
@@ -1284,6 +1286,10 @@ function panelParticles(root){
       r.appendChild(field("Velocidade", state.particles[n][2], v=>state.particles[n][2]=v, {type:"number", step:"0.1"}));
       r.appendChild(field("Espalhamento", state.particles[n][3], v=>state.particles[n][3]=v, {type:"number", step:"0.1"}));
       e.appendChild(r);
+      const r2 = document.createElement("div"); r2.className="row2";
+      r2.appendChild(field("Offset Y", state.particles[n][4] ?? 0.0, v=>state.particles[n][4]=v, {type:"number", step:"0.1"}));
+      r2.appendChild(field("Escala", state.particles[n][5] ?? 1.0, v=>state.particles[n][5]=v, {type:"number", step:"0.1"}));
+      e.appendChild(r2);
     } else {
       const add = document.createElement("button"); add.className="addbtn"; add.textContent="+ definir partícula";
       add.onclick = ()=>{ state.particles[n]=[...DEFAULT_PARTICLE]; renderPanels(); paletteHTML(); };
