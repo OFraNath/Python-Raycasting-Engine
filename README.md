@@ -509,7 +509,6 @@ RAYCASTING-ENGINE/
 - [ ] Otimização de desempenho da engine
 - [ ] Melhoria gráfica da engine
 - [x] Sistema de som posicional (estéreo + oclusão por parede)
-- [ ] Muffle / low-pass real por parede (fase 2 do som)
 
 *(sinta-se livre para abrir uma issue sugerindo algo)*
 
