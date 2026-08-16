@@ -448,8 +448,8 @@ RAYCASTING-ENGINE/
 
 ## 🧭 Roadmap / ideias futuras
 
-- [ ] Billboards com IA e movimento (entidades vivas)
-- [ ] Otimização de UX do editor de `.rcfg`
+- [ ] Otimização de desempenho da engine
+- [ ] Melhoria gráfica da engine
 - [ ] Sistema de som posicional
 
 *(sinta-se livre para abrir uma issue sugerindo algo)*

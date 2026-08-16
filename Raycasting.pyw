@@ -302,6 +302,12 @@ def _process_map_tokens(raw_rows):
     return grid, billboards, particles, light_cells
 
 
+AI_NONE = "none"
+AI_FRIENDLY = "friendly"
+AI_ENEMY = "enemy"
+_AI_VALIDOS = (AI_NONE, AI_FRIENDLY, AI_ENEMY)
+
+
 def _parse_billboards(d, pasta_base):
     billboards = {}
     for tipo, valor in d.items():
@@ -315,7 +321,10 @@ def _parse_billboards(d, pasta_base):
             continue
         offset_y = float(partes[1]) if len(partes) >= 2 and partes[1] else 0.0
         escala = float(partes[2]) if len(partes) >= 3 and partes[2] else 1.0
-        billboards[tipo_int] = (os.path.join(pasta_base, caminho_rel), offset_y, escala)
+        ai = partes[3].strip().lower() if len(partes) >= 4 and partes[3] else AI_NONE
+        if ai not in _AI_VALIDOS:
+            ai = AI_NONE
+        billboards[tipo_int] = (os.path.join(pasta_base, caminho_rel), offset_y, escala, ai)
     return billboards
 
 
@@ -386,12 +395,20 @@ def load_rcfg(caminho):
 
     billboard_defs = _parse_billboards(dados.get("BILLBOARDS", {}), pasta_base)
     billboard_instances = [
-        (x, y, billboard_defs[tipo][0], billboard_defs[tipo][1], billboard_defs[tipo][2], 0.0, 0.0, 0.0)
+        (x, y, billboard_defs[tipo][0], billboard_defs[tipo][1], billboard_defs[tipo][2], 0.0, 0.0, 0.0, billboard_defs[tipo][3])
         for (x, y, tipo) in billboard_cells
         if tipo in billboard_defs
     ]
     particle_defs = _parse_particles(dados.get("PARTICLES", {}), pasta_base)
     particle_instances = _particle_instances(particle_cells, particle_defs)
+
+    bb_completo = billboard_instances + particle_instances
+    bb_ai = []
+    for (x, y, _c, _o, _e, _a, _v, _f, ai) in billboard_instances:
+        bb_ai.append({
+            "x": x, "y": y, "ai": ai, "state": "IDLE",
+            "spawn_x": x, "spawn_y": y,
+        })
 
     return {
         "config": _parse_config(dados.get("CONFIG", {})),
@@ -404,7 +421,8 @@ def load_rcfg(caminho):
         "map": mapa,
         "lights": lights,
         "textures": texturas_abs,
-        "billboards": billboard_instances + particle_instances,
+        "billboards": bb_completo,
+        "bb_ai": bb_ai,
         "billboard_cells": billboard_cells,
         "particle_cells": particle_cells,
         "light_cells": light_cells,
@@ -491,6 +509,7 @@ SPAWN = (1.5, 1.5, 0.0)
 BILLBOARDS = []
 BILLBOARD_CELLS = []
 PARTICLE_CELLS = []
+BB_AI = []
 MAX_BILLBOARD_INSTANCES = 128
 BILLBOARD_LAYERS = 9
 _BB_LAYER_BY_PATH = {}
@@ -498,6 +517,14 @@ _BB_ASPECT_BY_PATH = {}
 tex_bbTex: "moderngl.TextureArray | None" = None
 # ── Flags por célula pro minimapa ──
 tex_mmFlags: "moderngl.Texture | None" = None
+
+# ── IA dos billboards (FSM + pathfinding) ──
+AI_FRIENDLY_SPEED = 0.035
+AI_ENEMY_SPEED = 0.05
+GAME_OVER = False
+GAME_OVER_START = 0.0
+overlay_prog: "moderngl.Program | None" = None
+overlay_vao: "moderngl.VertexArray | None" = None
 
 # ── Contexto e texturas do renderer ──
 ctx: "moderngl.Context | None" = None
@@ -742,6 +769,53 @@ def open_cell(cx, cy):
 
 def in_map(x, y):
     return 0 <= x < MAP_W and 0 <= y < MAP_H
+
+
+# ══ PATHFINDING (Wavefront / BFS) ═════════════════════════════
+from collections import deque
+
+
+def compute_dist_grid(tx, ty):
+    tw, th = MAP_W, MAP_H
+    grid = [[999999] * tw for _ in range(th)]
+    sx, sy = int(tx), int(ty)
+    if 0 <= sx < tw and 0 <= sy < th:
+        grid[sy][sx] = 0
+        fila = deque()
+        fila.append((sx, sy))
+    else:
+        return grid
+    while fila:
+        x, y = fila.popleft()
+        d = grid[y][x]
+        for ddx, ddy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            nx, ny = x + ddx, y + ddy
+            if 0 <= nx < tw and 0 <= ny < th:
+                if grid[ny][nx] > d + 1 and open_cell(nx, ny):
+                    grid[ny][nx] = d + 1
+                    fila.append((nx, ny))
+    return grid
+
+
+def _step_ai(bx, by, dist_grid, speed):
+    tw, th = MAP_W, MAP_H
+    cx, cy = int(bx), int(by)
+    best = None
+    best_d = dist_grid[cy][cx] if (0 <= cx < tw and 0 <= cy < th) else 999999
+    for ddx, ddy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+        nx, ny = cx + ddx, cy + ddy
+        if 0 <= nx < tw and 0 <= ny < th and open_cell(nx, ny):
+            if dist_grid[ny][nx] < best_d:
+                best_d = dist_grid[ny][nx]
+                best = (nx, ny)
+    if best is None:
+        return bx, by
+    tx, ty = best[0] + 0.5, best[1] + 0.5
+    ddx, ddy = tx - bx, ty - by
+    d = math.hypot(ddx, ddy)
+    if d <= speed:
+        return tx, ty
+    return bx + ddx / d * speed, by + ddy / d * speed
 
 
 # ══ SHADERS (GLSL 330) ═════════════════════════════════════════
@@ -1196,6 +1270,29 @@ def init_display():
     vbo = ctx.buffer(verts.tobytes())
     vao = ctx.vertex_array(prog, vbo, "in_pos", "in_uv")
 
+    overlay_vert = """
+#version 330 core
+in vec2 in_pos;
+in vec2 in_uv;
+out vec2 uv;
+void main() {
+    uv = in_uv;
+    gl_Position = vec4(in_pos, 0.0, 1.0);
+}
+"""
+    overlay_frag = """
+#version 330 core
+in vec2 uv;
+out vec4 outColor;
+uniform sampler2D u_tex;
+void main() {
+    outColor = texture(u_tex, uv);
+}
+"""
+    overlay_prog = ctx.program(vertex_shader=overlay_vert, fragment_shader=overlay_frag)
+    overlay_vbo = ctx.buffer(verts.tobytes())
+    overlay_vao = ctx.vertex_array(overlay_prog, overlay_vbo, "in_pos", "in_uv")
+
     tex_map = tex_light = tex_palA = tex_palB = tex_wallArr = tex_hasTex = None
     tex_bbTex = None
     upload_textures()
@@ -1296,7 +1393,7 @@ def upload_textures():
     tex_hasTex.filter = (moderngl.NEAREST, moderngl.NEAREST)
 
     bb_camadas = np.zeros((BILLBOARD_LAYERS, tam[1], tam[0], 4), dtype=np.uint8)
-    caminhos_billboards = sorted({caminho for (_, _, caminho, _, _, _, _, _) in BILLBOARDS})[:BILLBOARD_LAYERS]
+    caminhos_billboards = sorted({caminho for (_, _, caminho, _, _, _, _, _, _) in BILLBOARDS})[:BILLBOARD_LAYERS]
     aspects_billboards = [1.0] * BILLBOARD_LAYERS
     for idx, caminho_abs in enumerate(caminhos_billboards):
         arr, aspect = load_asset_image(caminho_abs, tam, contain=True)
@@ -1318,7 +1415,8 @@ def load_map_file(caminho, preserve_position=False):
     global MOUSE_SENS_Y, MAX_LOOK_Y, MM, SPAWN, px, py, pangle, look_y
     global BILLBOARDS, WALL_SCALE, LIGHT_CELLS
     global SKY, SKY_TIME, SKY_PAUSED
-    global BILLBOARD_CELLS, PARTICLE_CELLS
+    global BILLBOARD_CELLS, PARTICLE_CELLS, BB_AI
+    global GAME_OVER, GAME_OVER_START
     data = load_rcfg(caminho)
     cfg = data["config"]
     WIDTH, HEIGHT = cfg["window_width"], cfg["window_height"]
@@ -1361,6 +1459,9 @@ def load_map_file(caminho, preserve_position=False):
     BILLBOARD_CELLS = data["billboard_cells"]
     PARTICLE_CELLS = data["particle_cells"]
     LIGHT_CELLS = data["light_cells"]
+    BB_AI = data["bb_ai"]
+    GAME_OVER = False
+    GAME_OVER_START = 0.0
 
     big_map = (MAP_W * MAP_H) >= LOADING_SCREEN_THRESHOLD_CELLS
     progress_cb = None
@@ -1373,9 +1474,42 @@ def load_map_file(caminho, preserve_position=False):
 
 
 # ══ LOOP PRINCIPAL ═════════════════════════════════════════════
+def draw_game_over_overlay():
+    assert ctx is not None
+    assert overlay_prog is not None
+    assert overlay_vao is not None
+    surf = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+    surf.fill((0, 0, 0, 180))
+    font_big = pygame.font.SysFont(None, 96)
+    font_small = pygame.font.SysFont(None, 28)
+    t = font_big.render("GAME OVER", True, (220, 60, 60))
+    sub = font_small.render("Reiniciando o mapa...", True, (220, 220, 220))
+    surf.blit(t, ((WIDTH - t.get_width()) // 2, (HEIGHT - t.get_height()) // 2 - 20))
+    surf.blit(sub, ((WIDTH - sub.get_width()) // 2, (HEIGHT - t.get_height()) // 2 + 60))
+    data = pygame.image.tobytes(surf, "RGBA", True)
+    tex = ctx.texture((WIDTH, HEIGHT), 4, data)
+    tex.use(0)
+    overlay_prog["u_tex"] = 0
+    overlay_vao.render(mode=moderngl.TRIANGLES)
+    tex.release()
+
+
+def reset_after_game_over():
+    global px, py, pangle, look_y
+    px, py, pangle = SPAWN
+    look_y = 0
+    for idx, ai in enumerate(BB_AI):
+        ai["x"] = ai["spawn_x"]
+        ai["y"] = ai["spawn_y"]
+        ai["state"] = "IDLE"
+        old = BILLBOARDS[idx]
+        BILLBOARDS[idx] = (ai["x"], ai["y"], old[2], old[3], old[4], old[5], old[6], old[7], old[8])
+
+
 def main():
     global px, py, pangle, look_y
     global SKY_TIME, SKY_PAUSED
+    global GAME_OVER, GAME_OVER_START, BB_AI
 
     caminho = None
     if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
@@ -1504,22 +1638,49 @@ def main():
         sdx = math.cos(pangle + math.pi / 2) * speed
         sdy = math.sin(pangle + math.pi / 2) * speed
 
-        nx, ny = px, py
-        if keys[pygame.K_w] or keys[pygame.K_UP]:    nx += fdx; ny += fdy
-        if keys[pygame.K_s] or keys[pygame.K_DOWN]:  nx -= fdx; ny -= fdy
-        if keys[pygame.K_a] or keys[pygame.K_LEFT]:  nx -= sdx; ny -= sdy
-        if keys[pygame.K_d] or keys[pygame.K_RIGHT]: nx += sdx; ny += sdy
+        if not GAME_OVER:
+            nx, ny = px, py
+            if keys[pygame.K_w] or keys[pygame.K_UP]:    nx += fdx; ny += fdy
+            if keys[pygame.K_s] or keys[pygame.K_DOWN]:  nx -= fdx; ny -= fdy
+            if keys[pygame.K_a] or keys[pygame.K_LEFT]:  nx -= sdx; ny -= sdy
+            if keys[pygame.K_d] or keys[pygame.K_RIGHT]: nx += sdx; ny += sdy
 
-        m = 0.25
-        tcx = int(nx + m * math.copysign(1, nx - px))
-        tcy = int(ny + m * math.copysign(1, ny - py))
-        if open_cell(tcx, int(py)):
-            px = nx
-        if open_cell(int(px), tcy):
-            py = ny
-        if not in_map(px, py):
-            px, py, pangle = SPAWN
-            look_y = 0
+            m = 0.25
+            tcx = int(nx + m * math.copysign(1, nx - px))
+            tcy = int(ny + m * math.copysign(1, ny - py))
+            if open_cell(tcx, int(py)):
+                px = nx
+            if open_cell(int(px), tcy):
+                py = ny
+            if not in_map(px, py):
+                px, py, pangle = SPAWN
+                look_y = 0
+
+        # ══ ATUALIZAÇÃO DA IA DOS BILLBOARDS (FSM + PATHFINDING) ══
+        if not GAME_OVER and BB_AI:
+            dist_grid = compute_dist_grid(px, py)
+            for idx, ai in enumerate(BB_AI):
+                if ai["ai"] == AI_NONE:
+                    continue
+                bx, by = ai["x"], ai["y"]
+                eudist = math.hypot(px - bx, py - by)
+                if ai["ai"] == AI_FRIENDLY:
+                    if eudist > 1.2:
+                        ai["state"] = "FOLLOW"
+                        bx, by = _step_ai(bx, by, dist_grid, AI_FRIENDLY_SPEED * (dt * 60.0))
+                    else:
+                        ai["state"] = "STAY_CLOSE"
+                else:  # AI_ENEMY
+                    if eudist < 0.5:
+                        ai["state"] = "GAME_OVER_TRIGGER"
+                        GAME_OVER = True
+                        GAME_OVER_START = time_sec()
+                    else:
+                        ai["state"] = "CHASE"
+                        bx, by = _step_ai(bx, by, dist_grid, AI_ENEMY_SPEED * (dt * 60.0))
+                ai["x"], ai["y"] = bx, by
+                old = BILLBOARDS[idx]
+                BILLBOARDS[idx] = (bx, by, old[2], old[3], old[4], old[5], old[6], old[7], old[8])
 
         aspect = (WIDTH / HEIGHT) if HEIGHT else 1.0
         plane_len = math.tan(FOV / 2) * aspect
@@ -1583,7 +1744,7 @@ def main():
         bb_amp = [0.0] * MAX_BILLBOARD_INSTANCES
         bb_vel = [0.0] * MAX_BILLBOARD_INSTANCES
         bb_phase = [0.0] * MAX_BILLBOARD_INSTANCES
-        for idx, (bx, by, caminho_abs, yoff, escala, amp, vel, fase) in enumerate(bb_instances):
+        for idx, (bx, by, caminho_abs, yoff, escala, amp, vel, fase, _ai) in enumerate(bb_instances):
             bb_pos[idx] = (bx, by)
             bb_layer[idx] = float(_BB_LAYER_BY_PATH.get(caminho_abs, 0))
             bb_yoff[idx] = yoff
@@ -1637,6 +1798,13 @@ def main():
         prog["u_mmFlags"] = 7
 
         vao.render(mode=moderngl.TRIANGLES)
+
+        if GAME_OVER:
+            draw_game_over_overlay()
+            if time_sec() - GAME_OVER_START >= 2.0:
+                reset_after_game_over()
+                GAME_OVER = False
+
         pygame.display.flip()
 
         frames += 1
