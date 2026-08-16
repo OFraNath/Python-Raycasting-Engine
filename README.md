@@ -239,12 +239,7 @@ Cada token de uma célula é `base+extra`. A **base** é o que ocupa a célula (
 | `0+P3` | Célula vazia com as partículas `3` |
 | `0+L1+B2+P3` | As três camadas juntas na mesma célula |
 
-**Retrocompatibilidade** (a engine continua aceitando mapas antigos):
-
-- `L1`, `B1`, `P1` **sem base** são interpretados como `0+L1`, `0+B1`, `0+P1`.
-- Formatos 100% antigos, só com dígitos: `1` a `6` = parede e `7` ou mais = luz (`L1` equivale ao antigo `7`, `L2` ao `8`...). Nesse caso `7`, `8`, `9` **não** são paredes — por isso os mapas novos devem usar `L#`/`B#`/`P#`.
-
-> **Na prática:** escreva sempre os tokens compostos (`0+L1` em vez de `L1`). É o formato atual e evita ambiguidade entre "parede 7" e "luz 1".
+> **Sem retrocompatibilidade:** versões antigas da engine aceitavam `L1`/`B1`/`P1` sozinhos (sem base) e um formato legado só com dígitos (`7` a `9` = luz). Isso **foi removido** — hoje todo token precisa de uma base numérica válida (`0`–`9` ou `N`), e camadas exigem sempre a forma composta `base+L#`/`base+B#`/`base+P#` (ex.: `0+L1`). Mapas escritos no formato antigo precisam ser convertidos.
 
 ### `[CONFIG]` — opções globais
 
