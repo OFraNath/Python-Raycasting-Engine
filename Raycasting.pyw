@@ -506,7 +506,7 @@ THEME_DEFAULTS = {
 NIGHT_SKY_BASE = "#02030f"
 NIGHT_SKY_TOP = "#05061f"
 
-# ── ESTADO GLOBAL ─────────────────────────────────────────────
+# ══ ESTADO GLOBAL ═════════════════════════════════════════════
 WIDTH, HEIGHT = DEFAULT_CONFIG["window_width"], DEFAULT_CONFIG["window_height"]
 MM = DEFAULT_CONFIG["mm"]
 FOV = DEFAULT_CONFIG["fov"]
@@ -519,7 +519,7 @@ MAX_LOOK_Y = DEFAULT_CONFIG["max_look_y"]
 FOG = DEFAULT_CONFIG["fog"]
 AMBIENT = DEFAULT_CONFIG["ambient"]
 
-# ── Céu: sol/lua/estrelas + ciclo dia-noite ──
+# ══ Céu: sol/lua/estrelas + ciclo dia-noite ══
 SKY = dict(SKY_DEFAULTS)
 SKY["enabled"] = False
 SKY_TIME = SKY_DEFAULTS["start_time"]
@@ -549,7 +549,7 @@ LIGHT_H = MAP_H
 px, py, pangle, look_y = 1.5, 1.5, 0.0, 0.0
 SPAWN = (1.5, 1.5, 0.0)
 
-# ── Billboards e partículas ──
+# ══ Billboards e partículas ══
 BILLBOARDS = []
 BILLBOARD_CELLS = []
 PARTICLE_CELLS = []
@@ -559,10 +559,10 @@ BILLBOARD_LAYERS = 9
 _BB_LAYER_BY_PATH = {}
 _BB_ASPECT_BY_PATH = {}
 tex_bbTex: "moderngl.TextureArray | None" = None
-# ── Flags por célula pro minimapa ──
+# ══ Flags por célula pro minimapa ══
 tex_mmFlags: "moderngl.Texture | None" = None
 
-# ── IA dos billboards (FSM + pathfinding) ──
+# ══ IA dos billboards (FSM + pathfinding) ══
 AI_FRIENDLY_SPEED = 0.035
 AI_ENEMY_SPEED = 0.05
 AI_BB_CELLS = set()
@@ -571,13 +571,13 @@ GAME_OVER_START = 0.0
 overlay_prog: "moderngl.Program | None" = None
 overlay_vao: "moderngl.VertexArray | None" = None
 
-# ── Som posicional estéreo dos billboards ──
+# ══ Som posicional estéreo dos billboards ══
 BB_SOUND = []
 ACTIVE_SOUND_CHANNELS = []
 WALL_ATTEN = 0.45
 SOUND_MIXER_INIT = False
 
-# ── Contexto e texturas do renderer ──
+# ══ Contexto e texturas do renderer ══
 ctx: "moderngl.Context | None" = None
 tex_map: "moderngl.Texture | None" = None
 tex_light: "moderngl.Texture | None" = None
@@ -588,7 +588,7 @@ tex_palB: "moderngl.Texture | None" = None
 tex_wallArr: "moderngl.TextureArray | None" = None
 tex_hasTex: "moderngl.Texture | None" = None
 
-# ── Billboards desenhados como geometria instanciada ──
+# ══ Billboards desenhados como geometria instanciada ══
 bb_prog: "moderngl.Program | None" = None
 bb_vao: "moderngl.VertexArray | None" = None
 bb_inst_buf: "moderngl.Buffer | None" = None
@@ -598,7 +598,7 @@ fbo = None
 fbo_color: "moderngl.Texture | None" = None
 fbo_depth: "moderngl.Texture | None" = None
 
-# ── Tela de carregamento (estado) ──
+# ══ Tela de carregamento (estado) ══
 LOADING_SCREEN_THRESHOLD_CELLS = 256
 
 MAP_POSITIONS = {}
@@ -726,8 +726,6 @@ def compute_light_grid(on_progress=None):
     LIGHT_H = MAP_H * res
     sub = 1.0 / res
     grid = [[[AMBIENT, AMBIENT, AMBIENT] for _ in range(LIGHT_W)] for _ in range(LIGHT_H)]
-    # Floor-only light (ambient + bounce, NO orbs). The floor computes orb
-    # lighting per-pixel on the GPU, so it must not double-count baked orbs.
     grid_floor = [[[AMBIENT, AMBIENT, AMBIENT] for _ in range(LIGHT_W)] for _ in range(LIGHT_H)]
 
     n_soft = max(1, LIGHT_SOFT_SAMPLES)
@@ -1355,11 +1353,6 @@ void main() {
 
 
 # ══ SHADERS DE BILLBOARDS (geometria instanciada) ══════════════════
-# Os billboards sao desenhados como quads (sprites) numa passada
-# separada, em vez de varrer todos os billboards em cada pixel do
-# fragment shader (que era O(pixels x billboards) e causava a queda
-# de ~4x com muitos billboards). A oclusao por paredes usa a
-# profundidade de parede gerada pela cena (outDepth).
 BB_VERT = """
 #version 330 core
 in vec2 in_corner;   // x em [-0.5,0.5], y em [0,1] (0 = base, 1 = topo)
@@ -1741,7 +1734,6 @@ void main() {
     overlay_vbo = ctx.buffer(verts.tobytes())
     overlay_vao = ctx.vertex_array(overlay_prog, overlay_vbo, "in_pos", "in_uv")
 
-    # ── Passada de billboards como geometria (quads dinâmicos) ──
     global bb_prog, bb_vao, bb_inst_buf, cross_prog, cross_vao
     bb_prog = ctx.program(vertex_shader=BB_VERT, fragment_shader=BB_FRAG)
     bb_inst_buf = ctx.buffer(reserve=MAX_BILLBOARD_INSTANCES * 6 * 14 * 4)
@@ -2204,7 +2196,7 @@ def main():
                         bx, by = _step_ai(bx, by, dist_grid, ai["speed"] * (dt * 60.0))
                     else:
                         ai["state"] = "STAY_CLOSE"
-                else:  # AI_ENEMY
+                else:
                     if eudist < 0.5:
                         ai["state"] = "GAME_OVER_TRIGGER"
                         GAME_OVER = True
@@ -2344,21 +2336,18 @@ def main():
         prog["u_orbs"] = 8
         prog["u_orbCount"] = orb_count
 
-        # ── Passada 1: cena (paredes/chao/ceu/minimapa) -> FBO ──
         assert fbo is not None and ctx is not None
         ctx.viewport = (0, 0, WIDTH, HEIGHT)
         fbo.use()
         vao.render(mode=moderngl.TRIANGLES)
         ctx.screen.use()
 
-        # ── Copia a cena para a tela ──
         assert overlay_prog is not None and overlay_vao is not None
         assert fbo_color is not None
         fbo_color.use(0)
         overlay_prog["u_tex"] = 0
         overlay_vao.render(mode=moderngl.TRIANGLES)
 
-        # ── Passada 2: billboards como geometria (quads dinâmicos) ──
         assert bb_prog is not None and bb_vao is not None and bb_inst_buf is not None
         bb_count = len(bb_instances)
         order = sorted(range(bb_count),
@@ -2415,7 +2404,6 @@ def main():
         if bb_count > 0:
             bb_vao.render(mode=moderngl.TRIANGLES, vertices=bb_count * 6)
 
-        # ── Passada 3: mira (crosshair) por cima de tudo ──
         assert cross_prog is not None and cross_vao is not None
         cross_prog["u_res"] = (WIDTH, HEIGHT)
         cross_prog["u_cross"] = tuple(cr)
