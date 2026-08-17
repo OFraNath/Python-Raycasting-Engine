@@ -2587,13 +2587,77 @@ def time_sec():
 MAX_RESTART_ATTEMPTS = 3
 _RESTART_ENV_VAR = "RC_RESTART_COUNT"
 
+
+def format_smart_traceback(exc_type, exc, tb):
+    import traceback
+
+    this_file = os.path.abspath(__file__)
+    frames = traceback.extract_tb(tb)
+    frames_locais = [f for f in frames if os.path.abspath(f.filename) == this_file]
+    frame_culpado = frames_locais[-1] if frames_locais else (frames[-1] if frames else None)
+
+    # ── Dicionário de tradução: tipo de exceção → explicação amigável ──
+    def explicar():
+        nome_arq = getattr(exc, "filename", None)
+        if isinstance(exc, FileNotFoundError):
+            alvo = f' ("{os.path.basename(nome_arq)}")' if nome_arq else ""
+            return f"Um arquivo necessário não foi encontrado{alvo}."
+        if isinstance(exc, PermissionError):
+            alvo = f' ("{os.path.basename(nome_arq)}")' if nome_arq else ""
+            return f"Não foi possível acessar um arquivo{alvo} por falta de permissão."
+        if isinstance(exc, IsADirectoryError):
+            return "Uma pasta foi usada onde se esperava um arquivo."
+        if isinstance(exc, (ZeroDivisionError,)):
+            return "Uma conta internamente tentou dividir um valor por zero."
+        if isinstance(exc, KeyError):
+            chave = exc.args[0] if exc.args else "?"
+            return f'Uma configuração ou dado esperado ("{chave}") não foi encontrado.'
+        if isinstance(exc, IndexError):
+            return "O motor tentou acessar um item de uma lista que não existe (posição fora do intervalo)."
+        if isinstance(exc, AttributeError):
+            return "Uma parte do código tentou usar um recurso que não estava disponível no momento."
+        if isinstance(exc, TypeError):
+            return "Um tipo de dado incompatível foi usado em algum cálculo ou função."
+        if isinstance(exc, ValueError):
+            return "Um valor inválido ou fora do esperado foi fornecido em algum lugar."
+        if isinstance(exc, ImportError):
+            modulo = getattr(exc, "name", None)
+            alvo = f' ("{modulo}")' if modulo else ""
+            return f"Uma biblioteca necessária{alvo} não pôde ser carregada."
+        if isinstance(exc, MemoryError):
+            return "O computador ficou sem memória suficiente para continuar."
+        if isinstance(exc, RecursionError):
+            return "O motor entrou em um loop de chamadas que nunca terminava."
+        if isinstance(exc, OSError):
+            return "Ocorreu um problema de sistema (arquivo, tela ou dispositivo)."
+        return "Ocorreu um erro inesperado durante a execução."
+
+    explicacao = explicar()
+
+    linhas = ["Algo deu errado e o motor precisou parar."]
+    linhas.append("")
+
+    if frame_culpado:
+        nome_funcao = frame_culpado.name.replace("_", " ")
+        if nome_funcao == "modulo":
+            local_amigavel = "logo no início do motor"
+        else:
+            local_amigavel = f'na parte responsável por "{nome_funcao}"'
+        linhas.append(f"{explicacao} Isso aconteceu {local_amigavel}, na linha {frame_culpado.lineno} do motor.")
+    else:
+        linhas.append(explicacao)
+
+    return "\n".join(linhas)
+
 if __name__ == "__main__":
     try:
         main()
     except Exception:
         import traceback
 
-        # 1. Salvar o traceback completo em erro.log
+        exc_type, exc_value, exc_tb = sys.exc_info()
+
+        # 1. Salvar o traceback completo (cru) em erro.log — sem perder detalhe algum
         try:
             log = os.path.join(os.path.dirname(os.path.abspath(__file__)), "erro.log")
             with open(log, "w", encoding="utf-8") as f:
@@ -2601,7 +2665,11 @@ if __name__ == "__main__":
         except Exception:
             pass
 
-        tb_text = traceback.format_exc()
+        # Resumo inteligente: só o que importa para diagnosticar rápido
+        try:
+            resumo = format_smart_traceback(exc_type, exc_value, exc_tb)
+        except Exception:
+            resumo = traceback.format_exc().strip()
 
         # 2. Fechar o contexto gráfico (Pygame/OpenGL) com segurança
         try:
@@ -2612,35 +2680,87 @@ if __name__ == "__main__":
         attempt = int(os.environ.get(_RESTART_ENV_VAR, "0")) + 1
         pode_reiniciar = attempt <= MAX_RESTART_ATTEMPTS
 
-        # 3. Exibir popup nativo do sistema, independente do estado da janela do jogo
+        # 3. Exibir popup nativo do sistema, independente do estado da janela do motor
         try:
             import tkinter as tk
-            from tkinter import messagebox
+            import subprocess
+            import platform
+
+            def abrir_erro_log(_evento=None):
+                try:
+                    caminho = os.path.join(os.path.dirname(os.path.abspath(__file__)), "erro.log")
+                    sistema = platform.system()
+                    if sistema == "Windows":
+                        os.startfile(caminho)  # type: ignore[attr-defined]
+                    elif sistema == "Darwin":
+                        subprocess.Popen(["open", caminho])
+                    else:
+                        subprocess.Popen(["xdg-open", caminho])
+                except Exception:
+                    pass
+
+            if pode_reiniciar:
+                titulo = "Ops! O motor travou 🙁"
+                corpo = (
+                    f"{resumo}\n\n"
+                    f"Não se preocupe — o motor vai reiniciar sozinho agora "
+                    f"(tentativa {attempt} de {MAX_RESTART_ATTEMPTS})."
+                )
+            else:
+                titulo = "O motor não conseguiu se recuperar 😔"
+                corpo = (
+                    f"{resumo}\n\n"
+                    f"Já tentamos reiniciar {MAX_RESTART_ATTEMPTS} vezes e o problema "
+                    "continua acontecendo, então o motor vai ficar fechado por agora."
+                )
 
             root = tk.Tk()
             root.withdraw()
             root.attributes("-topmost", True)
-            # Mostra só as últimas linhas do traceback para não estourar o popup
-            resumo = "\n".join(tb_text.strip().splitlines()[-15:])
 
-            if pode_reiniciar:
-                titulo = "Raycasting Engine — Erro Fatal"
-                corpo = (
-                    f"Ocorreu um erro inesperado (tentativa {attempt}/{MAX_RESTART_ATTEMPTS}).\n"
-                    "A engine será reiniciada automaticamente.\n\n"
-                    f"{resumo}\n\n"
-                    "Detalhes completos em erro.log"
-                )
-            else:
-                titulo = "Raycasting Engine — Falha Persistente"
-                corpo = (
-                    f"A engine falhou {MAX_RESTART_ATTEMPTS} vezes seguidas e não será "
-                    "reiniciada automaticamente.\n\n"
-                    f"{resumo}\n\n"
-                    "Detalhes completos em erro.log"
-                )
+            janela = tk.Toplevel(root)
+            janela.title(titulo)
+            janela.resizable(False, False)
+            janela.attributes("-topmost", True)
+            janela.configure(bg="#f0f0f0", padx=24, pady=20)
 
-            messagebox.showerror(titulo, corpo)
+            tk.Label(
+                janela, text=titulo, font=("Segoe UI", 12, "bold"),
+                bg="#f0f0f0", justify="left", anchor="w",
+            ).pack(fill="x")
+
+            tk.Label(
+                janela, text=corpo, font=("Segoe UI", 10),
+                bg="#f0f0f0", justify="left", anchor="w", wraplength=420,
+            ).pack(fill="x", pady=(10, 4))
+
+            linha_log = tk.Frame(janela, bg="#f0f0f0")
+            linha_log.pack(fill="x", pady=(0, 14))
+            tk.Label(
+                linha_log, text="Detalhes técnicos salvos em:",
+                font=("Segoe UI", 10), bg="#f0f0f0",
+            ).pack(side="left")
+            link = tk.Label(
+                linha_log, text="erro.log", font=("Segoe UI", 10, "underline"),
+                bg="#f0f0f0", fg="#1a73e8", cursor="hand2",
+            )
+            link.pack(side="left", padx=(4, 0))
+            link.bind("<Button-1>", abrir_erro_log)
+
+            tk.Button(
+                janela, text="OK", width=10, command=janela.destroy,
+            ).pack(anchor="e")
+
+            janela.protocol("WM_DELETE_WINDOW", janela.destroy)
+            janela.update_idletasks()
+            largura = janela.winfo_width()
+            altura = janela.winfo_height()
+            x = (janela.winfo_screenwidth() - largura) // 2
+            y = (janela.winfo_screenheight() - altura) // 2
+            janela.geometry(f"+{x}+{y}")
+
+            janela.grab_set()
+            root.wait_window(janela)
             root.destroy()
         except Exception:
             pass
