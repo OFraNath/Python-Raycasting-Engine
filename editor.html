@@ -150,11 +150,11 @@
 <script>
 const DEFAULT_CONFIG = {
   window_w:960, window_h:560, mm:140, fov:60, num_rays:200, max_depth:30,
-  move_speed:0.06, run_multiplier:1.8, mouse_sens_x:0.004, mouse_sens_y:1.0,
+  move_speed:0.035, run_multiplier:1.8, mouse_sens_x:0.004, mouse_sens_y:1.0,
   max_look_y:240, fog:1.4, gradient_steps:14, ambient:0.07, floor_bands:3,
   floor_step:2, light_res:1, light_soft_samples:6, light_soft_radius:0.4,
   light_bounce:0.35, light_bounce_radius:1.6, light_bounce_passes:2, texture_size:256,
-  wall_scale:1
+  wall_scale:1, bob_enabled:true, bob_amount:8, bob_speed:10
 };
 const LIGHT_RES_VALIDOS = [1,2,4,8,16,32];
 const THEME_KEYS = ["sky_base","sky_top","floor_base","floor_top","crosshair",
@@ -301,6 +301,9 @@ function loadRcfg(text){
   s.config.mouse_sens_x = parseFloat(cfg.mouse_sens_x ?? 0.004);
   s.config.mouse_sens_y = parseFloat(cfg.mouse_sens_y ?? 1.0);
   s.config.max_look_y = parseInt(cfg.max_look_y ?? 240);
+  s.config.bob_enabled = String(cfg.bob_enabled ?? "true").trim().toLowerCase()==="true";
+  s.config.bob_amount = parseFloat(cfg.bob_amount ?? 8);
+  s.config.bob_speed = parseFloat(cfg.bob_speed ?? 10);
   s.config.fog = parseFloat(cfg.fog ?? 1.4);
   s.config.gradient_steps = parseInt(cfg.gradient_steps ?? 14);
   s.config.ambient = parseFloat(cfg.ambient ?? 0.07);
@@ -422,6 +425,9 @@ function serializeRcfg(s){
   L.push(`MOUSE_SENS_X ${s.config.mouse_sens_x}`);
   L.push(`MOUSE_SENS_Y ${s.config.mouse_sens_y}`);
   L.push(`MAX_LOOK_Y ${s.config.max_look_y}`);
+  L.push(`BOB_ENABLED ${s.config.bob_enabled}`);
+  L.push(`BOB_AMOUNT ${s.config.bob_amount}`);
+  L.push(`BOB_SPEED ${s.config.bob_speed}`);
   L.push(`FOG ${s.config.fog}`);
   L.push(`GRADIENT_STEPS ${s.config.gradient_steps}`);
   L.push(`AMBIENT ${s.config.ambient}`);
@@ -1074,6 +1080,11 @@ function panelConfig(root){
   r4.appendChild(field("Mouse sens Y", state.config.mouse_sens_y, v=>state.config.mouse_sens_y=v, {type:"number", step:"0.1"}));
   fs2.appendChild(r4);
   fs2.appendChild(field("Max look Y", state.config.max_look_y, v=>state.config.max_look_y=v, {type:"number"}));
+  fs2.appendChild(checkField("Andada (bob)", state.config.bob_enabled, v=>state.config.bob_enabled=v));
+  const r5b = document.createElement("div"); r5b.className="row2";
+  r5b.appendChild(field("Bob amount", state.config.bob_amount, v=>state.config.bob_amount=v, {type:"number", step:"0.5", min:"0"}));
+  r5b.appendChild(field("Bob speed", state.config.bob_speed, v=>state.config.bob_speed=v, {type:"number", step:"0.5", min:"0"}));
+  fs2.appendChild(r5b);
   root.appendChild(fs2);
 
   const fs3 = document.createElement("fieldset");

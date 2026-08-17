@@ -22,11 +22,14 @@ DEFAULT_CONFIG = {
     "fov": math_radians(60),
     "num_rays": 200,
     "max_depth": 30,
-    "move_speed": 0.06,
+    "move_speed": 0.035,
     "run_multiplier": 1.8,
     "mouse_sens_x": 0.004,
     "mouse_sens_y": 1.0,
     "max_look_y": 240,
+    "bob_enabled": True,
+    "bob_amount": 8.0,
+    "bob_speed": 10.0,
     "fog": 1.4,
     "gradient_steps": 14,
     "ambient": 0.07,
@@ -127,6 +130,9 @@ def _parse_config(d):
     cfg["mouse_sens_x"] = _to_float(d.get("mouse_sens_x", 0.004), "MOUSE_SENS_X")
     cfg["mouse_sens_y"] = _to_float(d.get("mouse_sens_y", 1.0), "MOUSE_SENS_Y")
     cfg["max_look_y"] = _to_int(d.get("max_look_y", 240), "MAX_LOOK_Y")
+    cfg["bob_enabled"] = str(d.get("bob_enabled", "true")).strip().lower() in ("1", "true", "yes")
+    cfg["bob_amount"] = _to_float(d.get("bob_amount", 8.0), "BOB_AMOUNT")
+    cfg["bob_speed"] = _to_float(d.get("bob_speed", 10.0), "BOB_SPEED")
     cfg["fog"] = _to_float(d.get("fog", 1.4), "FOG")
     cfg["gradient_steps"] = _to_int(d.get("gradient_steps", 14), "GRADIENT_STEPS")
     cfg["ambient"] = _to_float(d.get("ambient", 0.07), "AMBIENT")
@@ -516,6 +522,9 @@ RUN_MULTIPLIER = DEFAULT_CONFIG["run_multiplier"]
 MOUSE_SENS_X = DEFAULT_CONFIG["mouse_sens_x"]
 MOUSE_SENS_Y = DEFAULT_CONFIG["mouse_sens_y"]
 MAX_LOOK_Y = DEFAULT_CONFIG["max_look_y"]
+BOB_ENABLED = DEFAULT_CONFIG["bob_enabled"]
+BOB_AMOUNT = DEFAULT_CONFIG["bob_amount"]
+BOB_SPEED = DEFAULT_CONFIG["bob_speed"]
 FOG = DEFAULT_CONFIG["fog"]
 AMBIENT = DEFAULT_CONFIG["ambient"]
 
@@ -547,6 +556,8 @@ light_grid_floor_np: "np.ndarray | None" = None
 LIGHT_W = MAP_W
 LIGHT_H = MAP_H
 px, py, pangle, look_y = 1.5, 1.5, 0.0, 0.0
+bob_phase = 0.0
+bob_amt = 0.0
 SPAWN = (1.5, 1.5, 0.0)
 
 # ══ Billboards e partículas ══
@@ -1936,6 +1947,7 @@ def load_map_file(caminho, preserve_position=False):
     global LIGHT_SOFT_SAMPLES, LIGHT_SOFT_RADIUS, LIGHT_BOUNCE, LIGHT_BOUNCE_RADIUS, LIGHT_BOUNCE_PASSES
     global WIDTH, HEIGHT, FOV, MAX_DEPTH, MOVE_SPEED, RUN_MULTIPLIER, MOUSE_SENS_X
     global MOUSE_SENS_Y, MAX_LOOK_Y, MM, SPAWN, px, py, pangle, look_y
+    global BOB_ENABLED, BOB_AMOUNT, BOB_SPEED, bob_phase, bob_amt
     global BILLBOARDS, WALL_SCALE, LIGHT_CELLS
     global SKY, SKY_TIME, SKY_PAUSED
     global BILLBOARD_CELLS, PARTICLE_CELLS, BB_AI, AI_BB_CELLS
@@ -1951,6 +1963,9 @@ def load_map_file(caminho, preserve_position=False):
     MOUSE_SENS_X = cfg["mouse_sens_x"]
     MOUSE_SENS_Y = cfg["mouse_sens_y"]
     MAX_LOOK_Y = cfg["max_look_y"]
+    BOB_ENABLED = cfg["bob_enabled"]
+    BOB_AMOUNT = cfg["bob_amount"]
+    BOB_SPEED = cfg["bob_speed"]
     FOG = cfg["fog"]
     AMBIENT = cfg["ambient"]
     LIGHT_RES = cfg["light_res"]
@@ -1978,6 +1993,8 @@ def load_map_file(caminho, preserve_position=False):
     if not preserve_position:
         px, py, pangle = SPAWN
         look_y = 0
+        bob_phase = 0.0
+        bob_amt = 0.0
     BILLBOARDS = data["billboards"]
     BILLBOARD_CELLS = data["billboard_cells"]
     PARTICLE_CELLS = data["particle_cells"]
@@ -2021,9 +2038,11 @@ def draw_game_over_overlay():
 
 
 def reset_after_game_over():
-    global px, py, pangle, look_y
+    global px, py, pangle, look_y, bob_phase, bob_amt
     px, py, pangle = SPAWN
     look_y = 0
+    bob_phase = 0.0
+    bob_amt = 0.0
     for idx, ai in enumerate(BB_AI):
         ai["x"] = ai["spawn_x"]
         ai["y"] = ai["spawn_y"]
@@ -2034,6 +2053,7 @@ def reset_after_game_over():
 
 def main():
     global px, py, pangle, look_y
+    global bob_phase, bob_amt
     global SKY_TIME, SKY_PAUSED
     global GAME_OVER, GAME_OVER_START, BB_AI
 
@@ -2181,6 +2201,23 @@ def main():
             if not in_map(px, py):
                 px, py, pangle = SPAWN
                 look_y = 0
+                bob_phase = 0.0
+                bob_amt = 0.0
+
+        # ══ ANDADA REALISTA (head bob vertical) ══
+        moving = (not GAME_OVER) and (
+            keys[pygame.K_w] or keys[pygame.K_UP] or
+            keys[pygame.K_s] or keys[pygame.K_DOWN] or
+            keys[pygame.K_a] or keys[pygame.K_LEFT] or
+            keys[pygame.K_d] or keys[pygame.K_RIGHT]
+        )
+        sprinting = keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
+        if BOB_ENABLED and moving:
+            bob_phase += BOB_SPEED * dt * (RUN_MULTIPLIER if sprinting else 1.0)
+            bob_amt += (BOB_AMOUNT - bob_amt) * min(1.0, dt * 10.0)
+        else:
+            bob_amt += (0.0 - bob_amt) * min(1.0, dt * 10.0)
+        bob_offset = math.sin(bob_phase) * bob_amt
 
         # ══ ATUALIZAÇÃO DA IA DOS BILLBOARDS (FSM + PATHFINDING) ══
         if not GAME_OVER and BB_AI:
@@ -2223,7 +2260,7 @@ def main():
         prog["u_dir"] = (math.cos(pangle), math.sin(pangle))
         prog["u_plane"] = (plane_x, plane_y)
         prog["u_mapSize"] = (MAP_W, MAP_H)
-        prog["u_horizon"] = HEIGHT * 0.5 + look_y
+        prog["u_horizon"] = HEIGHT * 0.5 + look_y + bob_offset
         prog["u_scale"] = (HEIGHT / (2.0 * math.tan(FOV / 2))) * WALL_SCALE
         prog["u_ambient"] = AMBIENT
         prog["u_fog"] = FOG
@@ -2378,7 +2415,7 @@ def main():
         bb_prog["u_pos"] = (px, py)
         bb_prog["u_dir"] = (math.cos(pangle), math.sin(pangle))
         bb_prog["u_plane"] = (plane_x, plane_y)
-        bb_prog["u_horizon"] = HEIGHT * 0.5 + look_y
+        bb_prog["u_horizon"] = HEIGHT * 0.5 + look_y + bob_offset
         bb_prog["u_scale"] = (HEIGHT / (2.0 * math.tan(FOV / 2))) * WALL_SCALE
         bb_prog["u_time"] = time_sec() - t_start
         bb_prog["u_mapSize"] = (MAP_W, MAP_H)
