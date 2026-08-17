@@ -163,6 +163,11 @@ const DEFAULT_WALL_COLORS = ["#7a6a55","#5590c8","#4caf6b","#c85a8a","#9a6ac8","
   "#c8b45a","#5ac8b0","#c85a5a"];
 const DEFAULT_SKY = {enabled:false, cycle:false, day_length:120, start_time:8,
   sun_peak:45, sun_color:"#fff2c0", moon_color:"#b9c6e0", stars:140};
+const DEFAULT_SPAWN = {x:1.5, y:1.5, angle:0};
+const DEFAULT_LIGHT = {color:"#ffcc88", radius:4.0};
+const DEFAULT_BB_SPEED = 0.06;
+const DEFAULT_BILLBOARD = ["", 0.0, 1.0, "none", DEFAULT_BB_SPEED];
+const DEFAULT_BB_SOUND = {radius:8.0, volume:1.0};
 const DEFAULT_PARTICLE = ["", 8, 0.5, 0.4, 0.0, 1.0];
 
 function blankMap(rows, cols){
@@ -181,7 +186,7 @@ function blankMap(rows, cols){
 function freshState(){
   return {
     config: {...DEFAULT_CONFIG},
-    spawn: {x:1.5, y:1.5, angle:0},
+    spawn: {...DEFAULT_SPAWN},
     info: [["NAME","Novo Mapa"], ["AUTHOR",""]],
     colors: {1:["#7a6a55","#5a4d3d"]},
     textures: {},
@@ -290,38 +295,38 @@ function loadRcfg(text){
   s.map = grid;
 
   const cfg = dados.CONFIG || {};
-  const [w,h] = (cfg.window||"960 560").split(/\s+/);
-  s.config.window_w = parseInt(w)||960; s.config.window_h = parseInt(h)||560;
-  s.config.mm = parseInt(cfg.mm ?? 140);
-  s.config.fov = parseFloat(cfg.fov ?? 60);
+  const [w,h] = (cfg.window||`${DEFAULT_CONFIG.window_w} ${DEFAULT_CONFIG.window_h}`).split(/\s+/);
+  s.config.window_w = parseInt(w)||DEFAULT_CONFIG.window_w; s.config.window_h = parseInt(h)||DEFAULT_CONFIG.window_h;
+  s.config.mm = parseInt(cfg.mm ?? DEFAULT_CONFIG.mm);
+  s.config.fov = parseFloat(cfg.fov ?? DEFAULT_CONFIG.fov);
   s.config.num_rays = parseInt(cfg.num_rays ?? DEFAULT_CONFIG.num_rays);
-  s.config.max_depth = parseInt(cfg.max_depth ?? 30);
-  s.config.move_speed = parseFloat(cfg.move_speed ?? 0.06);
-  s.config.run_multiplier = parseFloat(cfg.run_multiplier ?? 1.8);
-  s.config.mouse_sens_x = parseFloat(cfg.mouse_sens_x ?? 0.004);
-  s.config.mouse_sens_y = parseFloat(cfg.mouse_sens_y ?? 1.0);
-  s.config.max_look_y = parseInt(cfg.max_look_y ?? 240);
-  s.config.bob_enabled = String(cfg.bob_enabled ?? "true").trim().toLowerCase()==="true";
-  s.config.bob_amount = parseFloat(cfg.bob_amount ?? 8);
-  s.config.bob_speed = parseFloat(cfg.bob_speed ?? 10);
-  s.config.fog = parseFloat(cfg.fog ?? 1.4);
-  s.config.gradient_steps = parseInt(cfg.gradient_steps ?? 14);
-  s.config.ambient = parseFloat(cfg.ambient ?? 0.07);
+  s.config.max_depth = parseInt(cfg.max_depth ?? DEFAULT_CONFIG.max_depth);
+  s.config.move_speed = parseFloat(cfg.move_speed ?? DEFAULT_CONFIG.move_speed);
+  s.config.run_multiplier = parseFloat(cfg.run_multiplier ?? DEFAULT_CONFIG.run_multiplier);
+  s.config.mouse_sens_x = parseFloat(cfg.mouse_sens_x ?? DEFAULT_CONFIG.mouse_sens_x);
+  s.config.mouse_sens_y = parseFloat(cfg.mouse_sens_y ?? DEFAULT_CONFIG.mouse_sens_y);
+  s.config.max_look_y = parseInt(cfg.max_look_y ?? DEFAULT_CONFIG.max_look_y);
+  s.config.bob_enabled = String(cfg.bob_enabled ?? DEFAULT_CONFIG.bob_enabled).trim().toLowerCase()==="true";
+  s.config.bob_amount = parseFloat(cfg.bob_amount ?? DEFAULT_CONFIG.bob_amount);
+  s.config.bob_speed = parseFloat(cfg.bob_speed ?? DEFAULT_CONFIG.bob_speed);
+  s.config.fog = parseFloat(cfg.fog ?? DEFAULT_CONFIG.fog);
+  s.config.gradient_steps = parseInt(cfg.gradient_steps ?? DEFAULT_CONFIG.gradient_steps);
+  s.config.ambient = parseFloat(cfg.ambient ?? DEFAULT_CONFIG.ambient);
   s.config.floor_bands = parseInt(cfg.floor_bands ?? DEFAULT_CONFIG.floor_bands);
-  s.config.floor_step = parseInt(cfg.floor_step ?? 2);
-  let lr = parseInt(cfg.light_res ?? 1);
+  s.config.floor_step = parseInt(cfg.floor_step ?? DEFAULT_CONFIG.floor_step);
+  let lr = parseInt(cfg.light_res ?? DEFAULT_CONFIG.light_res);
   if(!LIGHT_RES_VALIDOS.includes(lr)) lr = LIGHT_RES_VALIDOS.reduce((a,b)=>Math.abs(b-lr)<Math.abs(a-lr)?b:a);
   s.config.light_res = lr;
-  s.config.light_soft_samples = parseInt(cfg.light_soft_samples ?? 6);
-  s.config.light_soft_radius = parseFloat(cfg.light_soft_radius ?? 0.4);
-  s.config.light_bounce = parseFloat(cfg.light_bounce ?? 0.35);
-  s.config.light_bounce_radius = parseFloat(cfg.light_bounce_radius ?? 1.6);
-  s.config.light_bounce_passes = Math.max(1, parseInt(cfg.light_bounce_passes ?? 2));
-  s.config.texture_size = Math.max(2, parseInt(cfg.texture_size ?? 256));
-  s.config.wall_scale = parseFloat(cfg.wall_scale ?? 1.0);
+  s.config.light_soft_samples = parseInt(cfg.light_soft_samples ?? DEFAULT_CONFIG.light_soft_samples);
+  s.config.light_soft_radius = parseFloat(cfg.light_soft_radius ?? DEFAULT_CONFIG.light_soft_radius);
+  s.config.light_bounce = parseFloat(cfg.light_bounce ?? DEFAULT_CONFIG.light_bounce);
+  s.config.light_bounce_radius = parseFloat(cfg.light_bounce_radius ?? DEFAULT_CONFIG.light_bounce_radius);
+  s.config.light_bounce_passes = Math.max(1, parseInt(cfg.light_bounce_passes ?? DEFAULT_CONFIG.light_bounce_passes));
+  s.config.texture_size = Math.max(2, parseInt(cfg.texture_size ?? DEFAULT_CONFIG.texture_size));
+  s.config.wall_scale = parseFloat(cfg.wall_scale ?? DEFAULT_CONFIG.wall_scale);
 
   const sp = dados.SPAWN || {};
-  s.spawn = {x: parseFloat(sp.x ?? 1.5), y: parseFloat(sp.y ?? 1.5), angle: parseFloat(sp.angle ?? 0)};
+  s.spawn = {x: parseFloat(sp.x ?? DEFAULT_SPAWN.x), y: parseFloat(sp.y ?? DEFAULT_SPAWN.y), angle: parseFloat(sp.angle ?? DEFAULT_SPAWN.angle)};
 
   s.info = Object.entries(dados.INFO||{}).map(([k,v])=>[k.toUpperCase(), v]);
   if(!s.info.length) s.info = [["NAME",""],["AUTHOR",""]];
@@ -340,8 +345,8 @@ function loadRcfg(text){
   s.lights = {};
   for(const [tipoRaw,valor] of Object.entries(dados.LIGHTS||{})){
     const partes = valor.split(/[\s,]+/).filter(Boolean);
-    const cor = partes[0] ? normColor(partes[0]) : "#ffcc88";
-    const raio = partes[1] ? parseFloat(partes[1]) : 4.0;
+    const cor = partes[0] ? normColor(partes[0]) : DEFAULT_LIGHT.color;
+    const raio = partes[1] ? parseFloat(partes[1]) : DEFAULT_LIGHT.radius;
     const n = parseInt(tipoRaw);
     s.lights[n] = [cor, raio];
   }
@@ -357,12 +362,12 @@ function loadRcfg(text){
   for(const [tipo,valor] of Object.entries(dados.BILLBOARDS||{})){
     const partes = valor.split(/[\s,]+/).filter(Boolean);
     const caminho = partes[0]||"";
-    const offset = partes[1] ? parseFloat(partes[1]) : 0.0;
-    const escala = partes[2] ? parseFloat(partes[2]) : 1.0;
-    let ai = (partes[3]||"none").toLowerCase();
-    if(!["none","friendly","enemy"].includes(ai)) ai = "none";
+    const offset = partes[1] ? parseFloat(partes[1]) : DEFAULT_BILLBOARD[1];
+    const escala = partes[2] ? parseFloat(partes[2]) : DEFAULT_BILLBOARD[2];
+    let ai = (partes[3]||DEFAULT_BILLBOARD[3]).toLowerCase();
+    if(!["none","friendly","enemy"].includes(ai)) ai = DEFAULT_BILLBOARD[3];
     let speed = partes[4] ? parseFloat(partes[4]) : NaN;
-    if(!isFinite(speed) || speed <= 0) speed = 0.06;
+    if(!isFinite(speed) || speed <= 0) speed = DEFAULT_BB_SPEED;
     if(caminho) s.billboards[parseInt(tipo)] = [caminho, offset, escala, ai, speed];
   }
 
@@ -393,9 +398,9 @@ function loadRcfg(text){
   for(const [tipo,valor] of Object.entries(dados["BILLBOARD_SOUNDS"]||{})){
     const partes = valor.split(/[\s,]+/).filter(Boolean);
     const caminho = partes[0]||"";
-    const raio = partes[1] ? parseFloat(partes[1]) : 8.0;
-    let volume = partes[2] ? parseFloat(partes[2]) : 1.0;
-    if(!isFinite(volume)) volume = 1.0;
+    const raio = partes[1] ? parseFloat(partes[1]) : DEFAULT_BB_SOUND.radius;
+    let volume = partes[2] ? parseFloat(partes[2]) : DEFAULT_BB_SOUND.volume;
+    if(!isFinite(volume)) volume = DEFAULT_BB_SOUND.volume;
     volume = Math.max(0, Math.min(10, volume));
     if(caminho) s.bbSounds[parseInt(tipo)] = [caminho, raio, volume];
   }
@@ -497,7 +502,7 @@ function serializeRcfg(s){
     L.push("[BILLBOARDS]");
     for(const n of bbKeys){
       const [path, off, scale, ai, speed] = s.billboards[n];
-      if(path) L.push(`${n} ${path} ${off} ${scale ?? 1.0} ${ai ?? "none"} ${speed ?? 0.06}`);
+      if(path) L.push(`${n} ${path} ${off} ${scale ?? DEFAULT_BILLBOARD[2]} ${ai ?? DEFAULT_BILLBOARD[3]} ${speed ?? DEFAULT_BB_SPEED}`);
     }
     L.push("");
   }
@@ -506,7 +511,7 @@ function serializeRcfg(s){
     L.push("[BILLBOARD_SOUNDS]");
     for(const n of bbSoundKeys){
       const [path, raio, volume] = s.bbSounds[n];
-      if(path) L.push(`${n} ${path} ${raio ?? 8.0} ${volume ?? 1.0}`);
+      if(path) L.push(`${n} ${path} ${raio ?? DEFAULT_BB_SOUND.radius} ${volume ?? DEFAULT_BB_SOUND.volume}`);
     }
     L.push("");
   }
@@ -515,7 +520,7 @@ function serializeRcfg(s){
     L.push("[PARTICLES]");
     for(const n of particleKeys){
       const [path, qty, vel, spread, offsetY, escala] = s.particles[n];
-      if(path) L.push(`${n} ${path} ${qty} ${vel} ${spread} ${offsetY ?? 0.0} ${escala ?? 1.0}`);
+      if(path) L.push(`${n} ${path} ${qty} ${vel} ${spread} ${offsetY ?? DEFAULT_PARTICLE[4]} ${escala ?? DEFAULT_PARTICLE[5]}`);
     }
     L.push("");
   }
@@ -1288,29 +1293,29 @@ function panelBillboards(root){
       e.appendChild(field("Caminho no projeto (ex: sprites/planta.png)", state.billboards[n][0],
         v=>{ state.billboards[n][0]=v; paletteHTML(); }));
       e.appendChild(field("Offset Y", state.billboards[n][1], v=>state.billboards[n][1]=v, {type:"number", step:"0.1"}));
-      e.appendChild(field("Escala", state.billboards[n][2] ?? 1.0, v=>state.billboards[n][2]=v, {type:"number", step:"0.1"}));
+      e.appendChild(field("Escala", state.billboards[n][2] ?? DEFAULT_BILLBOARD[2], v=>state.billboards[n][2]=v, {type:"number", step:"0.1"}));
       const aiWrap = document.createElement("div"); aiWrap.className="field";
       aiWrap.innerHTML = `<label>Tipo de IA</label>`;
       const sel = document.createElement("select");
       sel.style.cssText="width:100%;background:var(--bg);border:1px solid var(--line);color:var(--text);padding:6px;border-radius:3px;font-family:var(--mono);";
       const opts = [["none","Nenhum (estático)"],["friendly","Amigável (seguidor)"],["enemy","Inimigo (perseguidor)"]];
-      for(const [v,l] of opts){ const o=document.createElement("option"); o.value=v; o.textContent=l; if((state.billboards[n][3]||"none")===v)o.selected=true; sel.appendChild(o); }
+      for(const [v,l] of opts){ const o=document.createElement("option"); o.value=v; o.textContent=l; if((state.billboards[n][3]||DEFAULT_BILLBOARD[3])===v)o.selected=true; sel.appendChild(o); }
       sel.onchange = ()=>{ state.billboards[n][3] = sel.value; };
       aiWrap.appendChild(sel);
       e.appendChild(aiWrap);
-      e.appendChild(field("Velocidade IA", state.billboards[n][4] ?? 0.06, v=>state.billboards[n][4]=v, {type:"number", step:"0.005"}));
+      e.appendChild(field("Velocidade IA", state.billboards[n][4] ?? DEFAULT_BB_SPEED, v=>state.billboards[n][4]=v, {type:"number", step:"0.005"}));
 
-      if(!state.bbSounds[n]) state.bbSounds[n] = ["", 8.0, 1.0];
+      if(!state.bbSounds[n]) state.bbSounds[n] = ["", DEFAULT_BB_SOUND.radius, DEFAULT_BB_SOUND.volume];
       const fsSom = document.createElement("fieldset");
       fsSom.innerHTML = `<legend>Som posicional (loop)</legend>`;
       fsSom.appendChild(field("Caminho do áudio (ex: som.mp3)", state.bbSounds[n][0],
         v=>{ state.bbSounds[n][0] = v; }, {}));
       fsSom.appendChild(field("Raio do som", state.bbSounds[n][1], v=>state.bbSounds[n][1]=v, {type:"number", step:"0.5"}));
-      fsSom.appendChild(field("Volume (0–10, 1 = 1x)", state.bbSounds[n][2] ?? 1.0, v=>state.bbSounds[n][2]=v, {type:"number", step:"0.1", min:0, max:10}));
+      fsSom.appendChild(field("Volume (0–10, 1 = 1x)", state.bbSounds[n][2] ?? DEFAULT_BB_SOUND.volume, v=>state.bbSounds[n][2]=v, {type:"number", step:"0.1", min:0, max:10}));
       e.appendChild(fsSom);
     } else {
       const add = document.createElement("button"); add.className="addbtn"; add.textContent="+ definir billboard";
-      add.onclick = ()=>{ state.billboards[n]=["", 0.0, 1.0, "none", 0.06]; renderPanels(); paletteHTML(); };
+      add.onclick = ()=>{ state.billboards[n]=[...DEFAULT_BILLBOARD]; renderPanels(); paletteHTML(); };
       e.appendChild(add);
     }
     root.appendChild(e);
@@ -1342,8 +1347,8 @@ function panelParticles(root){
       r.appendChild(field("Espalhamento", state.particles[n][3], v=>state.particles[n][3]=v, {type:"number", step:"0.1"}));
       e.appendChild(r);
       const r2 = document.createElement("div"); r2.className="row2";
-      r2.appendChild(field("Offset Y", state.particles[n][4] ?? 0.0, v=>state.particles[n][4]=v, {type:"number", step:"0.1"}));
-      r2.appendChild(field("Escala", state.particles[n][5] ?? 1.0, v=>state.particles[n][5]=v, {type:"number", step:"0.1"}));
+      r2.appendChild(field("Offset Y", state.particles[n][4] ?? DEFAULT_PARTICLE[4], v=>state.particles[n][4]=v, {type:"number", step:"0.1"}));
+      r2.appendChild(field("Escala", state.particles[n][5] ?? DEFAULT_PARTICLE[5], v=>state.particles[n][5]=v, {type:"number", step:"0.1"}));
       e.appendChild(r2);
     } else {
       const add = document.createElement("button"); add.className="addbtn"; add.textContent="+ definir partícula";
