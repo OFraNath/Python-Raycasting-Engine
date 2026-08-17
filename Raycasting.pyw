@@ -1031,8 +1031,8 @@ def compute_dist_grid_avoiding(tx, ty, avoid_x, avoid_y, avoid_radius, avoid_pen
                     cost += avoid_penalty
                 nd = d + cost
                 if nd < grid[ny][nx]:
-                    grid[ny][nx] = nd
-                    heapq.heappush(heap, (nd, nx, ny))
+                    grid[ny][nx] = nd # type: ignore
+                    heapq.heappush(heap, (nd, nx, ny)) # type: ignore
     return grid
 
 
@@ -2319,7 +2319,7 @@ def main():
                             if role == 1 and avoid_bkx is not None:
                                 # INKY: espelha o vetor Blinky→jogador para além do jogador (flanqueia pelo lado oposto).
                                 tx = px + (px - avoid_bkx)
-                                ty = py + (py - avoid_bky)
+                                ty = py + (py - avoid_bky) # type: ignore
                             elif role == 2:
                                 # PINKY: mira alguns tiles à frente da direção que o jogador está olhando/andando.
                                 tx = px + math.cos(pangle) * 3.5
