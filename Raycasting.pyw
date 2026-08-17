@@ -447,6 +447,7 @@ def load_rcfg(caminho):
         bb_ai.append({
             "x": x, "y": y, "ai": ai, "state": "IDLE",
             "spawn_x": x, "spawn_y": y, "speed": speed,
+            "rx": x, "ry": y,
         })
         if ai != AI_NONE:
             ci, cj = int(x), int(y)
@@ -2049,9 +2050,11 @@ def reset_after_game_over():
     for idx, ai in enumerate(BB_AI):
         ai["x"] = ai["spawn_x"]
         ai["y"] = ai["spawn_y"]
+        ai["rx"] = ai["spawn_x"]
+        ai["ry"] = ai["spawn_y"]
         ai["state"] = "IDLE"
         old = BILLBOARDS[idx]
-        BILLBOARDS[idx] = (ai["x"], ai["y"], old[2], old[3], old[4], old[5], old[6], old[7], old[8], old[9])
+        BILLBOARDS[idx] = (ai["rx"], ai["ry"], old[2], old[3], old[4], old[5], old[6], old[7], old[8], old[9])
 
 
 def main():
@@ -2217,9 +2220,6 @@ def main():
             moved = intensity > 0.0
 
         # ══ ANDADA REALISTA (head bob vertical) ══
-        # Intensidade suavizada para que o bob não fique em chave 0/1 quando o
-        # player se esfrega na parede (movimento micro): a amplitude e a cadência
-        # seguem proporcionalmente ao quanto ele realmente se desloca.
         bob_intensity += (intensity - bob_intensity) * min(1.0, dt * 8.0)
         sprinting = keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
         if BOB_ENABLED and bob_intensity > 0.02:
@@ -2255,8 +2255,13 @@ def main():
                         else:
                             bx, by = _step_ai(bx, by, dist_grid, ai["speed"] * (dt * 60.0))
                 ai["x"], ai["y"] = bx, by
+                
+                smooth = 1.0 - math.exp(-6.0 * dt)
+                ai["rx"] += (bx - ai["rx"]) * smooth
+                ai["ry"] += (by - ai["ry"]) * smooth
+
                 old = BILLBOARDS[idx]
-                BILLBOARDS[idx] = (bx, by, old[2], old[3], old[4], old[5], old[6], old[7], old[8], old[9])
+                BILLBOARDS[idx] = (ai["rx"], ai["ry"], old[2], old[3], old[4], old[5], old[6], old[7], old[8], old[9])
 
         if not GAME_OVER:
             update_billboard_sounds(px, py, pangle)
