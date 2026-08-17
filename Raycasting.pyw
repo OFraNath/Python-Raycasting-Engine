@@ -1931,6 +1931,7 @@ def update_orb_texture():
     if tex_orbs is None or tex_orbs.width != n:
         if tex_orbs is not None:
             tex_orbs.release()
+        assert ctx is not None
         tex_orbs = ctx.texture((n, 2), 4, data.tobytes(), dtype="f4")
         tex_orbs.filter = (moderngl.NEAREST, moderngl.NEAREST)
     else:
@@ -2352,6 +2353,7 @@ def main():
 
         # ── Copia a cena para a tela ──
         assert overlay_prog is not None and overlay_vao is not None
+        assert fbo_color is not None
         fbo_color.use(0)
         overlay_prog["u_tex"] = 0
         overlay_vao.render(mode=moderngl.TRIANGLES)
