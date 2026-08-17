@@ -1080,13 +1080,25 @@ bool losClear(vec2 a, vec2 b) {
     vec2 d = b - a;
     float dist = length(d);
     if (dist < 1e-4) return true;
-    int steps = int(dist / 0.2);
-    if (steps < 1) steps = 1;
-    for (int s = 1; s < steps; s++) {
-        float t = float(s) / float(steps);
-        ivec2 c = ivec2(floor(a + d * t));
-        if (c.x < 0 || c.y < 0 || c.x >= int(u_mapSize.x) || c.y >= int(u_mapSize.y)) continue;
-        int ct = cellType(vec2(c));
+    vec2 dir = d / dist;
+    vec2 cell = floor(a);
+    vec2 deltaDist = vec2(
+        abs(dir.x) < 1e-6 ? 1e30 : abs(1.0 / dir.x),
+        abs(dir.y) < 1e-6 ? 1e30 : abs(1.0 / dir.y)
+    );
+    ivec2 stp;
+    vec2 sideDist;
+    if (dir.x < 0.0) { stp.x = -1; sideDist.x = (a.x - cell.x) * deltaDist.x; }
+    else              { stp.x =  1; sideDist.x = (cell.x + 1.0 - a.x) * deltaDist.x; }
+    if (dir.y < 0.0) { stp.y = -1; sideDist.y = (a.y - cell.y) * deltaDist.y; }
+    else              { stp.y =  1; sideDist.y = (cell.y + 1.0 - a.y) * deltaDist.y; }
+    for (int i = 0; i < 96; i++) {
+        float nextT = min(sideDist.x, sideDist.y);
+        if (nextT >= dist) break;
+        if (sideDist.x < sideDist.y) { sideDist.x += deltaDist.x; cell.x += float(stp.x); }
+        else                          { sideDist.y += deltaDist.y; cell.y += float(stp.y); }
+        if (cell.x < 0.0 || cell.y < 0.0 || cell.x >= u_mapSize.x || cell.y >= u_mapSize.y) break;
+        int ct = cellType(cell);
         if (ct >= 1 && ct <= int(u_wallMax)) return false;
     }
     return true;
@@ -1427,13 +1439,25 @@ bool losClearBB(vec2 a, vec2 b) {
     vec2 d = b - a;
     float dist = length(d);
     if (dist < 1e-4) return true;
-    int steps = int(dist / 0.2);
-    if (steps < 1) steps = 1;
-    for (int s = 1; s < steps; s++) {
-        float t = float(s) / float(steps);
-        ivec2 c = ivec2(floor(a + d * t));
-        if (c.x < 0 || c.y < 0 || c.x >= int(u_mapSize.x) || c.y >= int(u_mapSize.y)) continue;
-        int ct = cellTypeBB(vec2(c));
+    vec2 dir = d / dist;
+    vec2 cell = floor(a);
+    vec2 deltaDist = vec2(
+        abs(dir.x) < 1e-6 ? 1e30 : abs(1.0 / dir.x),
+        abs(dir.y) < 1e-6 ? 1e30 : abs(1.0 / dir.y)
+    );
+    ivec2 stp;
+    vec2 sideDist;
+    if (dir.x < 0.0) { stp.x = -1; sideDist.x = (a.x - cell.x) * deltaDist.x; }
+    else              { stp.x =  1; sideDist.x = (cell.x + 1.0 - a.x) * deltaDist.x; }
+    if (dir.y < 0.0) { stp.y = -1; sideDist.y = (a.y - cell.y) * deltaDist.y; }
+    else              { stp.y =  1; sideDist.y = (cell.y + 1.0 - a.y) * deltaDist.y; }
+    for (int i = 0; i < 96; i++) {
+        float nextT = min(sideDist.x, sideDist.y);
+        if (nextT >= dist) break;
+        if (sideDist.x < sideDist.y) { sideDist.x += deltaDist.x; cell.x += float(stp.x); }
+        else                          { sideDist.y += deltaDist.y; cell.y += float(stp.y); }
+        if (cell.x < 0.0 || cell.y < 0.0 || cell.x >= u_mapSize.x || cell.y >= u_mapSize.y) break;
+        int ct = cellTypeBB(cell);
         if (ct >= 1 && ct <= 9) return false;
     }
     return true;
