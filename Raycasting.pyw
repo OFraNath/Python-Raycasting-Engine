@@ -2308,8 +2308,6 @@ def main():
                     else:
                         ai["state"] = "CHASE"
                         if eudist < 1.0:
-                            # perto o bastante: vai reto no jogador, sem
-                            # pathfinding (evita hesitação na captura).
                             bx, by = _step_toward(bx, by, px, py, ai["speed"] * (dt * 60.0))
                         else:
                             # ══ Alvo tático por papel (Blinky/Inky/Pinky) ══
@@ -2319,28 +2317,19 @@ def main():
                                 avoid_bkx = BB_AI[ai["blinky_idx"]]["x"]
                                 avoid_bky = BB_AI[ai["blinky_idx"]]["y"]
                             if role == 1 and avoid_bkx is not None:
-                                # INKY: espelha o vetor Blinky→jogador para
-                                # além do jogador (flanqueia pelo lado oposto).
+                                # INKY: espelha o vetor Blinky→jogador para além do jogador (flanqueia pelo lado oposto).
                                 tx = px + (px - avoid_bkx)
                                 ty = py + (py - avoid_bky)
                             elif role == 2:
-                                # PINKY: mira alguns tiles à frente da
-                                # direção que o jogador está olhando/andando.
+                                # PINKY: mira alguns tiles à frente da direção que o jogador está olhando/andando.
                                 tx = px + math.cos(pangle) * 3.5
                                 ty = py + math.sin(pangle) * 3.5
                             else:
                                 # BLINKY (role 0) ou fallback: persegue direto.
                                 tx, ty = px, py
-                            # Alvos projetados (Inky/Pinky) podem cair fora
-                            # do mapa — sem isso o BFS devolve grade vazia
-                            # e o billboard trava parado esperando o alvo
-                            # "voltar" pra dentro dos limites.
                             tx = max(0.5, min(MAP_W - 0.5, tx))
                             ty = max(0.5, min(MAP_H - 0.5, ty))
                             if role == 2 and avoid_bkx is not None:
-                                # PINKY nunca anda "colado" no BLINKY quando
-                                # existe caminho alternativo até o alvo,
-                                # mesmo que seja mais longo.
                                 dg = compute_dist_grid_avoiding(
                                     tx, ty, avoid_bkx, avoid_bky,
                                     avoid_radius=2.0, avoid_penalty=6.0,
@@ -2349,13 +2338,6 @@ def main():
                                 dg = get_dist_grid(tx, ty)
                             ccx, ccy = int(bx), int(by)
                             if not (0 <= ccx < MAP_W and 0 <= ccy < MAP_H) or dg[ccy][ccx] >= 999999:
-                                # Alvo tático (Inky/Pinky) está numa área do
-                                # mapa desconectada de onde o billboard está
-                                # agora — sem isso ele travaria pra sempre
-                                # esperando um caminho que nunca existe.
-                                # Cai pra perseguir o jogador direto neste
-                                # frame; volta a tentar flanquear assim que
-                                # um caminho válido reaparecer.
                                 dg = get_dist_grid(px, py)
                             bx, by = _step_ai(bx, by, dg, ai["speed"] * (dt * 60.0))
                 ai["x"], ai["y"] = bx, by
