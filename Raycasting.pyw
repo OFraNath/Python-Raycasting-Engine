@@ -543,6 +543,7 @@ LIGHT_BOUNCE_PASSES = DEFAULT_CONFIG["light_bounce_passes"]
 WALL_SCALE = DEFAULT_CONFIG["wall_scale"]
 light_grid = []
 light_grid_np: "np.ndarray | None" = None
+light_grid_floor_np: "np.ndarray | None" = None
 LIGHT_W = MAP_W
 LIGHT_H = MAP_H
 px, py, pangle, look_y = 1.5, 1.5, 0.0, 0.0
@@ -580,6 +581,8 @@ SOUND_MIXER_INIT = False
 ctx: "moderngl.Context | None" = None
 tex_map: "moderngl.Texture | None" = None
 tex_light: "moderngl.Texture | None" = None
+tex_light_floor: "moderngl.Texture | None" = None
+tex_orbs: "moderngl.Texture | None" = None
 tex_palA: "moderngl.Texture | None" = None
 tex_palB: "moderngl.Texture | None" = None
 tex_wallArr: "moderngl.TextureArray | None" = None
@@ -717,12 +720,15 @@ def _los_blocked_f(x0, y0, x1, y1):
 
 
 def compute_light_grid(on_progress=None):
-    global light_grid, light_grid_np, LIGHT_W, LIGHT_H
+    global light_grid, light_grid_np, light_grid_floor_np, LIGHT_W, LIGHT_H
     res = max(1, LIGHT_RES)
     LIGHT_W = MAP_W * res
     LIGHT_H = MAP_H * res
     sub = 1.0 / res
     grid = [[[AMBIENT, AMBIENT, AMBIENT] for _ in range(LIGHT_W)] for _ in range(LIGHT_H)]
+    # Floor-only light (ambient + bounce, NO orbs). The floor computes orb
+    # lighting per-pixel on the GPU, so it must not double-count baked orbs.
+    grid_floor = [[[AMBIENT, AMBIENT, AMBIENT] for _ in range(LIGHT_W)] for _ in range(LIGHT_H)]
 
     n_soft = max(1, LIGHT_SOFT_SAMPLES)
     soft_r = max(0.0, LIGHT_SOFT_RADIUS)
@@ -735,30 +741,32 @@ def compute_light_grid(on_progress=None):
         disc_pts.append((0.0, 0.0))
     n_pts = len(disc_pts)
 
-    def add_light(x, y, raio, cor_rgb):
+    def add_light(x, y, raio, cor_rgb, occlude=True, target=grid):
         cx, cy = x + 0.5, y + 0.5
         r = int(math.ceil(raio))
         for j in range(max(0, y - r), min(MAP_H, y + r + 1)):
             for i in range(max(0, x - r), min(MAP_W, x + r + 1)):
-                tcx, tcy = i + 0.5, j + 0.5
-                vis = 0
-                for ox, oy in disc_pts:
-                    if not _los_blocked_f(cx + ox, cy + oy, tcx, tcy):
-                        vis += 1
-                if vis == 0:
-                    continue
-                vis_frac = vis / n_pts
                 base_row = j * res
                 base_col = i * res
                 for sj in range(res):
                     wy = j + (sj + 0.5) * sub
                     dy = wy - cy
-                    row = grid[base_row + sj]
+                    row = target[base_row + sj]
                     for si in range(res):
                         wx = i + (si + 0.5) * sub
                         dist = math.hypot(wx - cx, dy)
                         if dist > raio:
                             continue
+                        if occlude:
+                            vis = 0
+                            for ox, oy in disc_pts:
+                                if not _los_blocked_f(cx + ox, cy + oy, wx, wy):
+                                    vis += 1
+                            if vis == 0:
+                                continue
+                            vis_frac = vis / n_pts
+                        else:
+                            vis_frac = 1.0
                         d = dist / raio
                         core = 1.0 / (1.0 + 6.0 * d * d)
                         edge = max(0.0, min(1.0, (1.0 - d) / 0.25))
@@ -780,7 +788,7 @@ def compute_light_grid(on_progress=None):
                     continue
             cor_hex, raio = LIGHT_ORBS.get(t, ("#ffcc88", 4.0))
             cor_rgb = tuple((c / 255.0) * 4.0 for c in _rgb(cor_hex))
-            add_light(x, y, raio, cor_rgb)
+            add_light(x, y, raio, cor_rgb, target=grid)
         if on_progress is not None:
             on_progress(0.7 * (y + 1) / MAP_H)
 
@@ -801,7 +809,8 @@ def compute_light_grid(on_progress=None):
                     if recv_intensity <= AMBIENT * 1.05:
                         continue
                     bounce_rgb = tuple(wall_rgb[k] * recv_intensity * decaimento for k in range(3))
-                    add_light(x, y, LIGHT_BOUNCE_RADIUS, bounce_rgb)
+                    add_light(x, y, LIGHT_BOUNCE_RADIUS, bounce_rgb, occlude=False, target=grid)
+                    add_light(x, y, LIGHT_BOUNCE_RADIUS, bounce_rgb, occlude=False, target=grid_floor)
                 if on_progress is not None:
                     passes = max(1, LIGHT_BOUNCE_PASSES)
                     frac = (passe + (y + 1) / MAP_H) / passes
@@ -818,6 +827,7 @@ def compute_light_grid(on_progress=None):
 
     light_grid = grid
     light_grid_np = np.array(grid, dtype=np.float32)
+    light_grid_floor_np = np.array(grid_floor, dtype=np.float32)
 
 
 def open_cell(cx, cy):
@@ -1027,6 +1037,10 @@ uniform float u_wallMax;
 uniform float u_orbMin;
 uniform sampler2D u_map;
 uniform sampler2D u_light;
+uniform sampler2D u_light_floor;
+uniform sampler2D u_orbs;
+uniform int u_orbCount;
+const int MAX_ORBS = 1024;
 uniform sampler2D u_palA;
 uniform sampler2D u_palB;
 uniform sampler2DArray u_wallTex;
@@ -1060,6 +1074,55 @@ vec3 lightAt(vec2 worldPos) {
     vec3 l = texture(u_light, uvL).rgb;
     vec3 hdr = vec3(u_ambient) + l;
     return softClip(hdr, 3.0, 7.0);
+}
+// Per-pixel orb lighting for the floor (uncapped orb count via u_orbs texture).
+bool losClear(vec2 a, vec2 b) {
+    vec2 d = b - a;
+    float dist = length(d);
+    if (dist < 1e-4) return true;
+    int steps = int(dist / 0.2);
+    if (steps < 1) steps = 1;
+    for (int s = 1; s < steps; s++) {
+        float t = float(s) / float(steps);
+        ivec2 c = ivec2(floor(a + d * t));
+        if (c.x < 0 || c.y < 0 || c.x >= int(u_mapSize.x) || c.y >= int(u_mapSize.y)) continue;
+        int ct = cellType(vec2(c));
+        if (ct >= 1 && ct <= int(u_wallMax)) return false;
+    }
+    return true;
+}
+vec3 directLight(vec2 world) {
+    vec3 acc = vec3(0.0);
+    for (int k = 0; k < MAX_ORBS; k++) {
+        if (k >= u_orbCount) break;
+        vec4 o0 = texelFetch(u_orbs, ivec2(k, 0), 0);
+        vec4 o1 = texelFetch(u_orbs, ivec2(k, 1), 0);
+        vec2 op = o0.xy;
+        float raio = o0.z;
+        vec3 ocol = o1.rgb;
+        vec2 dd = world - op;
+        float dist = length(dd);
+        if (dist > raio) continue;
+        if (!losClear(op, world)) continue;
+        float dn = dist / raio;
+        float core = 1.0 / (1.0 + 6.0 * dn * dn);
+        float edge = clamp((1.0 - dn) / 0.25, 0.0, 1.0);
+        edge = edge * edge * (3.0 - 2.0 * edge);
+        acc += ocol * core * edge;
+    }
+    return acc;
+}
+vec3 floorLight(vec2 worldPos) {
+    vec2 uvL = worldPos / u_mapSize;
+    vec3 l = directLight(worldPos) + texture(u_light_floor, uvL).rgb;
+    vec3 hdr = vec3(u_ambient) + l;
+    return softClip(hdr, 3.0, 7.0);
+}
+const float KNEE = 4.0;
+vec3 hdrShoulder(vec3 c) {
+    float l = max(c.r, max(c.g, c.b));
+    if (l > 1.0) c *= (1.0 + 0.35 * (l - 1.0) / (l + KNEE)) / l;
+    return c;
 }
 vec3 palColor(float t, int useA) {
     vec2 c = vec2((t + 0.5) / 256.0, 0.5);
@@ -1198,16 +1261,18 @@ void main() {
                 vec3 dynamicLight = lightv / (lightv + vec3(1.0));
                 wcolFinal = wcol * dynamicLight * 1.5;
             }
-            float sideShade = (side == 1) ? 0.8 : 1.0;
-            color = wcolFinal * sideShade * (1.0 - fogv);
+            vec2 sunDir = vec2(cos(u_sunAngle), sin(u_sunAngle));
+            float ndl = max(dot(faceNormal, sunDir), 0.0);
+            float sideShade = 0.6 + 0.4 * ndl;
+            color = hdrShoulder(wcolFinal * sideShade) * (1.0 - fogv);
         } else if (row > wallBottom) {
             float rowDist = (u_scale * 0.5) / (row - horizon);
             vec2 fc = u_pos + rowDist * rayDir;
             float depthT = (row - horizon) / (u_scale * 0.5);
             vec3 fcol = mix(u_floorB, u_floorT, clamp(depthT, 0.0, 1.0));
-            vec3 lv = lightAt(fc);
+            vec3 lv = floorLight(fc);
             float fv = clamp((u_fog * rowDist) / u_depth, 0.0, 1.0);
-            color = fcol * lv * (1.0 - fv);
+            color = hdrShoulder(fcol * lv) * (1.0 - fv);
         } else {
             color = skyColor(row, rayDir, uv.x * u_res.x);
         }
@@ -1217,9 +1282,9 @@ void main() {
             vec2 fc = u_pos + rowDist * rayDir;
             float depthT = (row - horizon) / (u_scale * 0.5);
             vec3 fcol = mix(u_floorB, u_floorT, clamp(depthT, 0.0, 1.0));
-            vec3 lv = lightAt(fc);
+            vec3 lv = floorLight(fc);
             float fv = clamp((u_fog * rowDist) / u_depth, 0.0, 1.0);
-            color = fcol * lv * (1.0 - fv);
+            color = hdrShoulder(fcol * lv) * (1.0 - fv);
         } else {
             color = skyColor(row, rayDir, uv.x * u_res.x);
         }
@@ -1339,7 +1404,12 @@ uniform vec2 u_pos;
 uniform vec2 u_dir;
 uniform vec2 u_plane;
 uniform vec2 u_mapSize;
+uniform sampler2D u_map;
 uniform sampler2D u_light;
+uniform sampler2D u_light_floor;
+uniform sampler2D u_orbs;
+uniform int u_orbCount;
+const int MAX_ORBS = 1024;
 uniform float u_ambient;
 uniform float u_fog;
 uniform float u_depth;
@@ -1350,6 +1420,58 @@ vec3 lightAt(vec2 worldPos) {
     vec3 over = max(hdr - vec3(3.0), vec3(0.0));
     vec3 comp = (7.0 - 3.0) * (vec3(1.0) - exp(-over / (7.0 - 3.0)));
     return min(hdr, vec3(3.0)) + comp;
+}
+vec2 mapTexBB(vec2 cell) { return vec2((cell.x + 0.5) / u_mapSize.x, (cell.y + 0.5) / u_mapSize.y); }
+int cellTypeBB(vec2 cell) { return int(round(texture(u_map, mapTexBB(cell)).r)); }
+bool losClearBB(vec2 a, vec2 b) {
+    vec2 d = b - a;
+    float dist = length(d);
+    if (dist < 1e-4) return true;
+    int steps = int(dist / 0.2);
+    if (steps < 1) steps = 1;
+    for (int s = 1; s < steps; s++) {
+        float t = float(s) / float(steps);
+        ivec2 c = ivec2(floor(a + d * t));
+        if (c.x < 0 || c.y < 0 || c.x >= int(u_mapSize.x) || c.y >= int(u_mapSize.y)) continue;
+        int ct = cellTypeBB(vec2(c));
+        if (ct >= 1 && ct <= 9) return false;
+    }
+    return true;
+}
+vec3 directLightBB(vec2 world) {
+    vec3 acc = vec3(0.0);
+    for (int k = 0; k < MAX_ORBS; k++) {
+        if (k >= u_orbCount) break;
+        vec4 o0 = texelFetch(u_orbs, ivec2(k, 0), 0);
+        vec4 o1 = texelFetch(u_orbs, ivec2(k, 1), 0);
+        vec2 op = o0.xy;
+        float raio = o0.z;
+        vec3 ocol = o1.rgb;
+        vec2 dd = world - op;
+        float dist = length(dd);
+        if (dist > raio) continue;
+        if (!losClearBB(op, world)) continue;
+        float dn = dist / raio;
+        float core = 1.0 / (1.0 + 6.0 * dn * dn);
+        float edge = clamp((1.0 - dn) / 0.25, 0.0, 1.0);
+        edge = edge * edge * (3.0 - 2.0 * edge);
+        acc += ocol * core * edge;
+    }
+    return acc;
+}
+vec3 floorLightBB(vec2 worldPos) {
+    vec2 uvL = worldPos / u_mapSize;
+    vec3 l = directLightBB(worldPos) + texture(u_light_floor, uvL).rgb;
+    vec3 hdr = vec3(u_ambient) + l;
+    vec3 over = max(hdr - vec3(3.0), vec3(0.0));
+    vec3 comp = (7.0 - 3.0) * (vec3(1.0) - exp(-over / (7.0 - 3.0)));
+    return min(hdr, vec3(3.0)) + comp;
+}
+const float KNEE = 4.0;
+vec3 hdrShoulder(vec3 c) {
+    float l = max(c.r, max(c.g, c.b));
+    if (l > 1.0) c *= (1.0 + 0.35 * (l - 1.0) / (l + KNEE)) / l;
+    return c;
 }
 void main() {
     if (v_depth <= 0.05) discard;
@@ -1364,11 +1486,11 @@ void main() {
     float ndcx = gl_FragCoord.x / u_res.x * 2.0 - 1.0;
     vec2 rayDir = u_dir + u_plane * ndcx;
     vec2 bWorld = clamp(u_pos + v_depth * rayDir, vec2(0.02), u_mapSize - vec2(0.02));
-    vec3 lv = lightAt(bWorld);
+    vec3 lv = floorLightBB(bWorld);
     vec3 dyn = lv / (lv + vec3(1.0));
     vec3 lit = s.rgb * dyn * 2.0;
     float fogv = clamp((u_fog * v_depth) / u_depth, 0.0, 1.0);
-    outColor = vec4(lit * (1.0 - fogv), s.a);
+    outColor = vec4(hdrShoulder(lit) * (1.0 - fogv), s.a);
 }
 """
 
@@ -1633,12 +1755,14 @@ def init_fbo():
 
 
 def upload_textures():
-    global tex_map, tex_light, tex_palA, tex_palB, tex_wallArr, tex_hasTex, tex_bbTex, tex_mmFlags
+    global tex_map, tex_light, tex_light_floor, tex_palA, tex_palB, tex_wallArr, tex_hasTex, tex_bbTex, tex_mmFlags
     assert ctx is not None
     if tex_map is not None:
         tex_map.release()
     if tex_light is not None:
         tex_light.release()
+    if tex_light_floor is not None:
+        tex_light_floor.release()
     if tex_palA is not None:
         tex_palA.release()
     if tex_palB is not None:
@@ -1688,6 +1812,11 @@ def upload_textures():
         tex_light.filter = (moderngl.LINEAR, moderngl.LINEAR)
         tex_light.repeat_x = False
         tex_light.repeat_y = False
+    if light_grid_floor_np is not None:
+        tex_light_floor = ctx.texture((LIGHT_W, LIGHT_H), 3, light_grid_floor_np.tobytes(), dtype="f4")
+        tex_light_floor.filter = (moderngl.LINEAR, moderngl.LINEAR)
+        tex_light_floor.repeat_x = False
+        tex_light_floor.repeat_y = False
 
     palA = np.zeros((256, 4), dtype=np.float32)
     palB = np.zeros((256, 4), dtype=np.float32)
@@ -1738,6 +1867,51 @@ def upload_textures():
     global _BB_LAYER_BY_PATH, _BB_ASPECT_BY_PATH
     _BB_LAYER_BY_PATH = {c: i for i, c in enumerate(caminhos_billboards)}
     _BB_ASPECT_BY_PATH = {c: aspects_billboards[i] for i, c in enumerate(caminhos_billboards)}
+
+
+_orb_cache_sig = None
+
+
+def update_orb_texture():
+    """Build/upload the orb light-list texture (uncapped orb count).
+
+    Layout: RGBA32F texture of size (N, 2). Row 0 = (x+0.5, y+0.5, radius, _),
+    row 1 = (r, g, b, _) with rgb already scaled like the CPU bake ((c/255)*4).
+    Returns the number of orbs. Rebuilt only when the orb set changes.
+    """
+    global tex_orbs, _orb_cache_sig
+    orbs = []
+    for y in range(MAP_H):
+        for x in range(MAP_W):
+            t = LIGHT_CELLS.get((x, y))
+            if t is None:
+                t = MAP[y][x]
+                if not is_orb(t):
+                    continue
+            cor_hex, raio = LIGHT_ORBS.get(t, ("#ffcc88", 4.0))
+            orbs.append((x, y, raio, cor_hex))
+    sig = tuple(orbs)
+    if sig == _orb_cache_sig and tex_orbs is not None:
+        return len(orbs)
+    _orb_cache_sig = sig
+    n = max(1, len(orbs))
+    data = np.zeros((2, n, 4), dtype=np.float32)
+    for idx, (x, y, raio, cor_hex) in enumerate(orbs):
+        rr, gg, bb = _rgb(cor_hex)
+        data[0, idx, 0] = x + 0.5
+        data[0, idx, 1] = y + 0.5
+        data[0, idx, 2] = raio
+        data[1, idx, 0] = (rr / 255.0) * 4.0
+        data[1, idx, 1] = (gg / 255.0) * 4.0
+        data[1, idx, 2] = (bb / 255.0) * 4.0
+    if tex_orbs is None or tex_orbs.width != n:
+        if tex_orbs is not None:
+            tex_orbs.release()
+        tex_orbs = ctx.texture((n, 2), 4, data.tobytes(), dtype="f4")
+        tex_orbs.filter = (moderngl.NEAREST, moderngl.NEAREST)
+    else:
+        tex_orbs.write(data.tobytes())
+    return len(orbs)
 
 
 def load_map_file(caminho, preserve_position=False):
@@ -2129,6 +2303,11 @@ def main():
         tex_hasTex.use(5)
         if tex_mmFlags is not None:
             tex_mmFlags.use(7)
+        orb_count = update_orb_texture()
+        if tex_light_floor is not None:
+            tex_light_floor.use(6)
+        if tex_orbs is not None:
+            tex_orbs.use(8)
         prog["u_map"] = 0
         prog["u_light"] = 1
         prog["u_palA"] = 2
@@ -2136,6 +2315,9 @@ def main():
         prog["u_wallTex"] = 4
         prog["u_hasTex"] = 5
         prog["u_mmFlags"] = 7
+        prog["u_light_floor"] = 6
+        prog["u_orbs"] = 8
+        prog["u_orbCount"] = orb_count
 
         # ── Passada 1: cena (paredes/chao/ceu/minimapa) -> FBO ──
         assert fbo is not None and ctx is not None
@@ -2188,15 +2370,22 @@ def main():
         bb_prog["u_ambient"] = AMBIENT
         bb_prog["u_fog"] = FOG
         bb_prog["u_depth"] = float(MAX_DEPTH)
-        if tex_light is not None:
-            tex_light.use(1)
         assert tex_bbTex is not None
         tex_bbTex.use(6)
         assert fbo_depth is not None
         fbo_depth.use(7)
-        bb_prog["u_light"] = 1
+        if tex_map is not None:
+            tex_map.use(8)
+        if tex_light_floor is not None:
+            tex_light_floor.use(9)
+        if tex_orbs is not None:
+            tex_orbs.use(10)
         bb_prog["u_bbTex"] = 6
         bb_prog["u_wallDepth"] = 7
+        bb_prog["u_map"] = 8
+        bb_prog["u_light_floor"] = 9
+        bb_prog["u_orbs"] = 10
+        bb_prog["u_orbCount"] = orb_count
         if bb_count > 0:
             bb_vao.render(mode=moderngl.TRIANGLES, vertices=bb_count * 6)
 
