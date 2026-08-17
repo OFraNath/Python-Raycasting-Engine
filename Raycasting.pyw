@@ -1021,15 +1021,9 @@ uniform sampler2D u_palB;
 uniform sampler2DArray u_wallTex;
 uniform sampler2D u_hasTex;
 uniform int u_bbCount;
-uniform vec2 u_bbPos[128];
-uniform float u_bbLayer[128];
-uniform float u_bbYOff[128];
-uniform float u_bbAspect[128];
-uniform float u_bbScale[128];
-uniform float u_bbAmp[128];
-uniform float u_bbVel[128];
-uniform float u_bbPhase[128];
-uniform float u_bbAI[128];
+uniform vec4 u_bbA[128];   // xy = pos, z = layer, w = yoff
+uniform vec4 u_bbB[128];   // x = aspect, y = scale, z = amp, w = vel
+uniform vec4 u_bbC[128];   // x = phase, y = ai
 uniform float u_time;
 uniform sampler2DArray u_bbTex;
 uniform sampler2D u_mmFlags;
@@ -1226,18 +1220,18 @@ void main() {
         float bestDepth = 1e9;
         vec4 bestSample = vec4(0.0);
         for (int b = 0; b < u_bbCount && b < 128; b++) {
-            vec2 sp = u_bbPos[b] - u_pos;
+            vec2 sp = u_bbA[b].xy - u_pos;
             float tx = invDet * (u_dir.y * sp.x - u_dir.x * sp.y);
             float ty = invDet * (-u_plane.y * sp.x + u_plane.x * sp.y);
             if (ty <= 0.05 || ty >= wallDepth || ty >= bestDepth) continue;
             float screenX = (u_res.x * 0.5) * (1.0 + tx / ty);
-            float size = (u_scale / ty) * u_bbScale[b];
-            float aspect = u_bbAspect[b];
+            float size = (u_scale / ty) * u_bbB[b].y;
+            float aspect = u_bbB[b].x;
             float sizeX = size * aspect;
             float sizeY = size;
             float left = screenX - sizeX * 0.5;
             if (pix.x < left || pix.x > left + sizeX) continue;
-            float dynOff = u_bbYOff[b] + u_bbAmp[b] * sin(u_time * u_bbVel[b] + u_bbPhase[b]);
+            float dynOff = u_bbA[b].w + u_bbB[b].z * sin(u_time * u_bbB[b].w + u_bbC[b].x);
             float shift = dynOff * (u_scale / ty);
             float bottom = horizon + sizeY * 0.5 - shift;
             float top = bottom - sizeY;
@@ -1247,7 +1241,7 @@ void main() {
             float ux = (pix.x - left) / sizeX;
             float uy = (row - top) / sizeY;
             vec2 uvBB = vec2(ux * fx + (1.0 - fx) * 0.5, uy * fy + (1.0 - fy) * 0.5);
-            vec4 s = texture(u_bbTex, vec3(uvBB, u_bbLayer[b]));
+            vec4 s = texture(u_bbTex, vec3(uvBB, u_bbA[b].z));
             if (s.a < 0.05) continue;
             bestDepth = ty;
             bestSample = s;
@@ -1305,11 +1299,11 @@ void main() {
         float dd = length(pix - u_dirPix);
         if (dd < 2.5) color = u_mmPlayer;
         for (int b = 0; b < u_bbCount && b < 128; b++) {
-            if (u_bbAI[b] < 0.5) continue;
-            vec2 bbPix = u_mmPos + u_bbPos[b] * u_mmCell;
+            if (u_bbC[b].y < 0.5) continue;
+            vec2 bbPix = u_mmPos + u_bbA[b].xy * u_mmCell;
             float bbd = length(pix - bbPix);
             if (bbd < 3.5) {
-                color = (u_bbAI[b] < 1.5) ? vec3(0.878, 0.643, 0.345)
+                color = (u_bbC[b].y < 1.5) ? vec3(0.878, 0.643, 0.345)
                                           : vec3(0.79, 0.34, 0.31);
             }
         }
@@ -1418,6 +1412,53 @@ void main() {
 
 
 # ══ INICIALIZAÇÃO pygame + moderngl ═════════════════════════════
+class _GLLoader:
+    def __init__(self, lib, getproc):
+        import ctypes
+        proto = ctypes.CFUNCTYPE(ctypes.c_ulonglong, ctypes.c_char_p)
+        proc = ctypes.cast(getproc, proto)
+        self.load_opengl_function = (
+            lambda n: proc(n.encode())
+            or ctypes.cast(getattr(lib, n, 0), ctypes.c_void_p).value or 0
+        )
+
+    def __enter__(self):
+        pass
+
+    def __exit__(self, *args):
+        pass
+
+
+def create_gl_context():
+    try:
+        return moderngl.create_context()
+    except Exception:
+        pass
+    import ctypes
+    for libname in ("libGL.so", "libEGL.so"):
+        try:
+            lib = ctypes.CDLL(libname)
+        except OSError:
+            continue
+        if libname == "libGL.so":
+            has_ctx = lib.glXGetCurrentContext
+            getproc = lib.glXGetProcAddress
+        else:
+            has_ctx = lib.eglGetCurrentContext
+            getproc = lib.eglGetProcAddress
+        if not has_ctx():
+            continue
+        try:
+            moderngl.init_context(loader=_GLLoader(lib, getproc))
+            return moderngl.get_context()
+        except Exception:
+            continue
+    raise RuntimeError(
+        "Nao foi possivel criar o contexto OpenGL. Instale libglvnd-dev "
+        "(sudo apt-get install libglvnd-dev) e rode num display X11/Wayland."
+    )
+
+
 def resize_window(width, height):
     pygame.display.set_mode((width, height), pygame.OPENGL | pygame.DOUBLEBUF)
     if ctx is not None:
@@ -1431,7 +1472,7 @@ def init_display():
     pygame.init()
     resize_window(WIDTH, HEIGHT)
     pygame.display.set_caption("Raycasting FPS GPU")
-    ctx = moderngl.create_context()
+    ctx = create_gl_context()
     ctx.viewport = (0, 0, WIDTH, HEIGHT)
     ctx.enable(moderngl.BLEND)
 
@@ -1946,15 +1987,18 @@ def main():
                 ai = BB_AI[idx]["ai"]
                 bb_ai_type[idx] = 2.0 if ai == AI_ENEMY else (1.0 if ai == AI_FRIENDLY else 0.0)
         prog["u_bbCount"] = len(bb_instances)
-        prog["u_bbPos"] = bb_pos
-        prog["u_bbLayer"] = bb_layer
-        prog["u_bbYOff"] = bb_yoff
-        prog["u_bbAspect"] = bb_aspect
-        prog["u_bbScale"] = bb_scale
-        prog["u_bbAmp"] = bb_amp
-        prog["u_bbVel"] = bb_vel
-        prog["u_bbPhase"] = bb_phase
-        prog["u_bbAI"] = bb_ai_type
+        prog["u_bbA"] = [
+            (bb_pos[i][0], bb_pos[i][1], bb_layer[i], bb_yoff[i])
+            for i in range(MAX_BILLBOARD_INSTANCES)
+        ]
+        prog["u_bbB"] = [
+            (bb_aspect[i], bb_scale[i], bb_amp[i], bb_vel[i])
+            for i in range(MAX_BILLBOARD_INSTANCES)
+        ]
+        prog["u_bbC"] = [
+            (bb_phase[i], bb_ai_type[i], 0.0, 0.0)
+            for i in range(MAX_BILLBOARD_INSTANCES)
+        ]
         prog["u_time"] = time_sec() - t_start
 
         prog["u_mmPos"] = (mm_x, mm_y)

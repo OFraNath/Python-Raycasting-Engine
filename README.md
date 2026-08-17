@@ -36,19 +36,58 @@ Na pasta do projeto:
 pip install -r requirements.txt
 ```
 
-### Executando
+### Executando no Windows
 
-Sem argumentos, a engine abre com um mapa de demonstração embutido:
+O arquivo principal usa a extensão `.pyw`, que o Windows associa ao
+`pythonw` (executa **sem abrir o console**). Basta dar duplo-clique ou:
 
 ```bash
 python Raycasting.pyw
 ```
 
-Passando o caminho de um `.rcfg`, esse mapa é carregado na inicialização:
+Para carregar um mapa específico na inicialização:
 
 ```bash
 python Raycasting.pyw showcase.rcfg
 ```
+
+### Executando no Linux
+
+No Linux a extensão `.pyw` **não tem associação especial** (ela é só um nome
+de arquivo), então use `python3`. Além disso, diferente do Windows, o OpenGL
+**não vem pré-instalado**: a engine precisa das bibliotecas nativas
+`libGL.so` / `libEGL.so`, que nas distros Debian/Ubuntu ficam no pacote de
+desenvolvimento. Se estiverem ausentes, use o launcher **`run.sh`** (já
+incluído neste repositório), que ajusta o `LD_LIBRARY_PATH` automaticamente:
+
+```bash
+./run.sh                 # mapa de demonstração embutido
+./run.sh showcase.rcfg   # mapa específico
+```
+
+> **Sem `sudo`?** O `run.sh` usa a pasta `.local-libs/` (symlinks locais para
+> as libs versionadas `.so.1` já presentes no sistema), então funciona **sem
+> instalar nada no sistema**. Para uma solução permanente e system-wide:
+> ```bash
+> sudo apt-get install libglvnd-dev
+> ```
+
+### Diferenças Windows × Linux (resumo)
+
+| | Windows | Linux |
+| :--- | :--- | :--- |
+| Comando | `python Raycasting.pyw` | `./run.sh` (ou `python3 Raycasting.pyw`) |
+| Extensão `.pyw` | abre sem console (via `pythonw`) | ignorada; roda como script Python comum |
+| OpenGL | fornecido pelo driver de vídeo | precisa de `libGL.so`/`libEGL.so` (ver acima) |
+| Backend GL | `opengl32.dll` | GLX (X11) ou EGL (Wayland), detectado automaticamente pela engine |
+| Sem libs de sistema | — | use `run.sh` (symlinks locais) ou `apt-get install libglvnd-dev` |
+
+> **Nota técnica:** a engine tenta `moderngl.create_context()` e, no Linux,
+> cai num *fallback* que detecta sozinho o backend disponível (GLX no X11 ou
+> EGL no Wayland). No Windows/Mac esse caminho nativo é usado diretamente,
+> sem impacto. O shader foi ajustado para respeitar o limite de 1024
+> *constant registers* de drivers mais antigos (ex.: NVIDIA 390), empacotando
+> os atributos de billboard em arrays `vec4`.
 
 **Durante a execução:**
 
@@ -463,7 +502,8 @@ angle 0
 As antigas demonstrações separadas (`demos/`, `mapas/`) foram **unificadas em uma única vitrine**, [`showcase.rcfg`](./showcase.rcfg), na raiz do projeto — reúne texturas, luzes, céu dinâmico, billboards e partículas num só lugar. Rode com:
 
 ```bash
-python Raycasting.pyw showcase.rcfg
+python Raycasting.pyw showcase.rcfg   # Windows
+./run.sh showcase.rcfg                # Linux
 ```
 
 ou arraste o arquivo para dentro da janela.
@@ -481,6 +521,8 @@ O repositório inclui [`editor.html`](./editor.html), que roda **direto no naveg
 ```
 RAYCASTING-ENGINE/
 ├── Raycasting.pyw        # arquivo principal — execute este
+├── run.sh                # launcher para Linux (resolve as libs OpenGL)
+├── .local-libs/          # symlinks locais das libs OpenGL (usado pelo run.sh)
 ├── requirements.txt
 ├── editor.html           # editor visual de mapas .rcfg (abre no navegador)
 ├── showcase.rcfg         # mapa de exemplo (texturas, luzes, céu, billboards e partículas)
