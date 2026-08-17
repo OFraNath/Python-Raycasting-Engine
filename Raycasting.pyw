@@ -2602,15 +2602,75 @@ def time_sec():
     return time.time()
 
 
+MAX_RESTART_ATTEMPTS = 3
+_RESTART_ENV_VAR = "RC_RESTART_COUNT"
+
 if __name__ == "__main__":
     try:
         main()
     except Exception:
         import traceback
+
+        # 1. Salvar o traceback completo em erro.log
         try:
             log = os.path.join(os.path.dirname(os.path.abspath(__file__)), "erro.log")
             with open(log, "w", encoding="utf-8") as f:
                 traceback.print_exc(file=f)
         except Exception:
             pass
-        raise
+
+        tb_text = traceback.format_exc()
+
+        # 2. Fechar o contexto gráfico (Pygame/OpenGL) com segurança
+        try:
+            pygame.quit()
+        except Exception:
+            pass
+
+        attempt = int(os.environ.get(_RESTART_ENV_VAR, "0")) + 1
+        pode_reiniciar = attempt <= MAX_RESTART_ATTEMPTS
+
+        # 3. Exibir popup nativo do sistema, independente do estado da janela do jogo
+        try:
+            import tkinter as tk
+            from tkinter import messagebox
+
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            # Mostra só as últimas linhas do traceback para não estourar o popup
+            resumo = "\n".join(tb_text.strip().splitlines()[-15:])
+
+            if pode_reiniciar:
+                titulo = "Raycasting Engine — Erro Fatal"
+                corpo = (
+                    f"Ocorreu um erro inesperado (tentativa {attempt}/{MAX_RESTART_ATTEMPTS}).\n"
+                    "A engine será reiniciada automaticamente.\n\n"
+                    f"{resumo}\n\n"
+                    "Detalhes completos em erro.log"
+                )
+            else:
+                titulo = "Raycasting Engine — Falha Persistente"
+                corpo = (
+                    f"A engine falhou {MAX_RESTART_ATTEMPTS} vezes seguidas e não será "
+                    "reiniciada automaticamente.\n\n"
+                    f"{resumo}\n\n"
+                    "Detalhes completos em erro.log"
+                )
+
+            messagebox.showerror(titulo, corpo)
+            root.destroy()
+        except Exception:
+            pass
+
+        # 4. Reiniciar a engine do zero, até MAX_RESTART_ATTEMPTS vezes
+        if pode_reiniciar:
+            try:
+                python = sys.executable
+                env = os.environ.copy()
+                env[_RESTART_ENV_VAR] = str(attempt)
+                os.execve(python, [python] + sys.argv, env)
+            except Exception:
+                raise
+        else:
+            raise
