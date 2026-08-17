@@ -1422,7 +1422,7 @@ def _make_progress_drawer(width, height, label):
         return draw
 
     sw, sh = ctx.screen.width, ctx.screen.height
-    surf = pygame.Surface((sw, sh))
+    surf = pygame.Surface((sw, sh), pygame.SRCALPHA)
     bar_w, bar_h = int(sw * 0.6), 22
     bx, by = (sw - bar_w) // 2, sh // 2
 
@@ -1468,7 +1468,7 @@ void main() {
         nonlocal quad_tex
         assert ctx is not None
         pct = max(0.0, min(1.0, pct))
-        surf.fill((12, 12, 18))
+        surf.fill((12, 12, 18, 255))
         pygame.draw.rect(surf, (55, 55, 68), (bx, by, bar_w, bar_h), border_radius=6)
         pygame.draw.rect(surf, (90, 200, 160), (bx, by, int(bar_w * pct), bar_h), border_radius=6)
         pygame.draw.rect(surf, (120, 120, 140), (bx, by, bar_w, bar_h), width=1, border_radius=6)
@@ -1484,6 +1484,7 @@ void main() {
         quad_tex.use(0)
         prog_loading["u_tex"] = 0
         ctx.viewport = (0, 0, sw, sh)
+        ctx.clear(color=(12 / 255, 12 / 255, 18 / 255, 1.0))
         vao_loading.render(mode=moderngl.TRIANGLES)
         pygame.event.pump()
         pygame.display.flip()
