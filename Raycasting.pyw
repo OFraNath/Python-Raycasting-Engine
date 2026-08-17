@@ -440,14 +440,28 @@ def load_rcfg(caminho):
     bb_ai = []
     ai_cells = set()
     bb_sounds = []
+    enemy_count = 0
+    trio_blinky_bb_idx = None  # índice em bb_ai do BLINKY do trio corrente
     for (x, y, tipo) in billboard_cells:
         if tipo not in billboard_defs:
             continue
         _caminho, _off, _esc, ai, speed = billboard_defs[tipo]
+        role = None
+        blinky_idx = None
+        if ai == AI_ENEMY:
+            # role 0 = BLINKY, 1 = INKY, 2 = PINKY — contado só entre
+            # inimigos (amigáveis no meio da lista não entram na conta).
+            role = enemy_count % 3
+            if role == 0:
+                trio_blinky_bb_idx = len(bb_ai)  # este item é o novo BLINKY
+            else:
+                blinky_idx = trio_blinky_bb_idx  # INKY/PINKY referenciam o BLINKY do trio
+            enemy_count += 1
         bb_ai.append({
             "x": x, "y": y, "ai": ai, "state": "IDLE",
             "spawn_x": x, "spawn_y": y, "speed": speed,
             "rx": x, "ry": y,
+            "role": role, "blinky_idx": blinky_idx,
         })
         if ai != AI_NONE:
             ci, cj = int(x), int(y)
@@ -963,6 +977,7 @@ def update_billboard_sounds(px, py, pangle):
 
 
 # ══ PATHFINDING (Wavefront / BFS) ═════════════════════════════
+import heapq
 from collections import deque
 
 
@@ -985,6 +1000,39 @@ def compute_dist_grid(tx, ty):
                 if grid[ny][nx] > d + 1 and open_cell(nx, ny):
                     grid[ny][nx] = d + 1
                     fila.append((nx, ny))
+    return grid
+
+
+def compute_dist_grid_avoiding(tx, ty, avoid_x, avoid_y, avoid_radius, avoid_penalty):
+    # Como compute_dist_grid, mas células perto de (avoid_x, avoid_y) custam
+    # mais caro a atravessar — Dijkstra em vez de BFS. Usado pro Pinky nunca
+    # "colar" no Blinky quando existe rota alternativa até o alvo (mesmo que
+    # essa rota seja mais longa); se a única rota passa perto do Blinky, o
+    # custo extra é finito, então ele ainda vai por ali em vez de travar.
+    tw, th = MAP_W, MAP_H
+    grid = [[999999] * tw for _ in range(th)]
+    sx, sy = int(tx), int(ty)
+    if not (0 <= sx < tw and 0 <= sy < th):
+        return grid
+    grid[sy][sx] = 0
+    r2 = avoid_radius * avoid_radius
+    heap = [(0, sx, sy)]
+    while heap:
+        d, x, y = heapq.heappop(heap)
+        if d > grid[y][x]:
+            continue
+        for ddx, ddy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            nx, ny = x + ddx, y + ddy
+            if 0 <= nx < tw and 0 <= ny < th and open_cell(nx, ny):
+                cost = 1.0
+                ddx2 = (nx + 0.5 - avoid_x)
+                ddy2 = (ny + 0.5 - avoid_y)
+                if ddx2 * ddx2 + ddy2 * ddy2 <= r2:
+                    cost += avoid_penalty
+                nd = d + cost
+                if nd < grid[ny][nx]:
+                    grid[ny][nx] = nd
+                    heapq.heappush(heap, (nd, nx, ny))
     return grid
 
 
@@ -2231,7 +2279,16 @@ def main():
 
         # ══ ATUALIZAÇÃO DA IA DOS BILLBOARDS (FSM + PATHFINDING) ══
         if not GAME_OVER and BB_AI:
-            dist_grid = compute_dist_grid(px, py)
+            dist_grid_cache = {}
+
+            def get_dist_grid(tx, ty):
+                key = (int(tx), int(ty))
+                g = dist_grid_cache.get(key)
+                if g is None:
+                    g = compute_dist_grid(tx, ty)
+                    dist_grid_cache[key] = g
+                return g
+
             for idx, ai in enumerate(BB_AI):
                 if ai["ai"] == AI_NONE:
                     continue
@@ -2240,7 +2297,7 @@ def main():
                 if ai["ai"] == AI_FRIENDLY:
                     if eudist > 1.2:
                         ai["state"] = "FOLLOW"
-                        bx, by = _step_ai(bx, by, dist_grid, ai["speed"] * (dt * 60.0))
+                        bx, by = _step_ai(bx, by, get_dist_grid(px, py), ai["speed"] * (dt * 60.0))
                     else:
                         ai["state"] = "STAY_CLOSE"
                 else:
@@ -2251,9 +2308,56 @@ def main():
                     else:
                         ai["state"] = "CHASE"
                         if eudist < 1.0:
+                            # perto o bastante: vai reto no jogador, sem
+                            # pathfinding (evita hesitação na captura).
                             bx, by = _step_toward(bx, by, px, py, ai["speed"] * (dt * 60.0))
                         else:
-                            bx, by = _step_ai(bx, by, dist_grid, ai["speed"] * (dt * 60.0))
+                            # ══ Alvo tático por papel (Blinky/Inky/Pinky) ══
+                            role = ai["role"]
+                            avoid_bkx = avoid_bky = None
+                            if ai["blinky_idx"] is not None:
+                                avoid_bkx = BB_AI[ai["blinky_idx"]]["x"]
+                                avoid_bky = BB_AI[ai["blinky_idx"]]["y"]
+                            if role == 1 and avoid_bkx is not None:
+                                # INKY: espelha o vetor Blinky→jogador para
+                                # além do jogador (flanqueia pelo lado oposto).
+                                tx = px + (px - avoid_bkx)
+                                ty = py + (py - avoid_bky)
+                            elif role == 2:
+                                # PINKY: mira alguns tiles à frente da
+                                # direção que o jogador está olhando/andando.
+                                tx = px + math.cos(pangle) * 3.5
+                                ty = py + math.sin(pangle) * 3.5
+                            else:
+                                # BLINKY (role 0) ou fallback: persegue direto.
+                                tx, ty = px, py
+                            # Alvos projetados (Inky/Pinky) podem cair fora
+                            # do mapa — sem isso o BFS devolve grade vazia
+                            # e o billboard trava parado esperando o alvo
+                            # "voltar" pra dentro dos limites.
+                            tx = max(0.5, min(MAP_W - 0.5, tx))
+                            ty = max(0.5, min(MAP_H - 0.5, ty))
+                            if role == 2 and avoid_bkx is not None:
+                                # PINKY nunca anda "colado" no BLINKY quando
+                                # existe caminho alternativo até o alvo,
+                                # mesmo que seja mais longo.
+                                dg = compute_dist_grid_avoiding(
+                                    tx, ty, avoid_bkx, avoid_bky,
+                                    avoid_radius=2.0, avoid_penalty=6.0,
+                                )
+                            else:
+                                dg = get_dist_grid(tx, ty)
+                            ccx, ccy = int(bx), int(by)
+                            if not (0 <= ccx < MAP_W and 0 <= ccy < MAP_H) or dg[ccy][ccx] >= 999999:
+                                # Alvo tático (Inky/Pinky) está numa área do
+                                # mapa desconectada de onde o billboard está
+                                # agora — sem isso ele travaria pra sempre
+                                # esperando um caminho que nunca existe.
+                                # Cai pra perseguir o jogador direto neste
+                                # frame; volta a tentar flanquear assim que
+                                # um caminho válido reaparecer.
+                                dg = get_dist_grid(px, py)
+                            bx, by = _step_ai(bx, by, dg, ai["speed"] * (dt * 60.0))
                 ai["x"], ai["y"] = bx, by
                 
                 smooth = 1.0 - math.exp(-6.0 * dt)

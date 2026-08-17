@@ -362,7 +362,7 @@ function loadRcfg(text){
     let ai = (partes[3]||"none").toLowerCase();
     if(!["none","friendly","enemy"].includes(ai)) ai = "none";
     let speed = partes[4] ? parseFloat(partes[4]) : NaN;
-    if(!isFinite(speed) || speed <= 0) speed = (ai==="enemy") ? 0.05 : 0.035;
+    if(!isFinite(speed) || speed <= 0) speed = 0.06;
     if(caminho) s.billboards[parseInt(tipo)] = [caminho, offset, escala, ai, speed];
   }
 
@@ -497,7 +497,7 @@ function serializeRcfg(s){
     L.push("[BILLBOARDS]");
     for(const n of bbKeys){
       const [path, off, scale, ai, speed] = s.billboards[n];
-      if(path) L.push(`${n} ${path} ${off} ${scale ?? 1.0} ${ai ?? "none"} ${speed ?? 0.035}`);
+      if(path) L.push(`${n} ${path} ${off} ${scale ?? 1.0} ${ai ?? "none"} ${speed ?? 0.06}`);
     }
     L.push("");
   }
@@ -1298,7 +1298,7 @@ function panelBillboards(root){
       sel.onchange = ()=>{ state.billboards[n][3] = sel.value; };
       aiWrap.appendChild(sel);
       e.appendChild(aiWrap);
-      e.appendChild(field("Velocidade IA", state.billboards[n][4] ?? 0.035, v=>state.billboards[n][4]=v, {type:"number", step:"0.005"}));
+      e.appendChild(field("Velocidade IA", state.billboards[n][4] ?? 0.06, v=>state.billboards[n][4]=v, {type:"number", step:"0.005"}));
 
       if(!state.bbSounds[n]) state.bbSounds[n] = ["", 8.0, 1.0];
       const fsSom = document.createElement("fieldset");
@@ -1310,7 +1310,7 @@ function panelBillboards(root){
       e.appendChild(fsSom);
     } else {
       const add = document.createElement("button"); add.className="addbtn"; add.textContent="+ definir billboard";
-      add.onclick = ()=>{ state.billboards[n]=["", 0.0, 1.0, "none", 0.035]; renderPanels(); paletteHTML(); };
+      add.onclick = ()=>{ state.billboards[n]=["", 0.0, 1.0, "none", 0.06]; renderPanels(); paletteHTML(); };
       e.appendChild(add);
     }
     root.appendChild(e);
