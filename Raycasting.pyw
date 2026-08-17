@@ -558,6 +558,7 @@ LIGHT_H = MAP_H
 px, py, pangle, look_y = 1.5, 1.5, 0.0, 0.0
 bob_phase = 0.0
 bob_amt = 0.0
+bob_intensity = 0.0
 SPAWN = (1.5, 1.5, 0.0)
 
 # ══ Billboards e partículas ══
@@ -1947,7 +1948,7 @@ def load_map_file(caminho, preserve_position=False):
     global LIGHT_SOFT_SAMPLES, LIGHT_SOFT_RADIUS, LIGHT_BOUNCE, LIGHT_BOUNCE_RADIUS, LIGHT_BOUNCE_PASSES
     global WIDTH, HEIGHT, FOV, MAX_DEPTH, MOVE_SPEED, RUN_MULTIPLIER, MOUSE_SENS_X
     global MOUSE_SENS_Y, MAX_LOOK_Y, MM, SPAWN, px, py, pangle, look_y
-    global BOB_ENABLED, BOB_AMOUNT, BOB_SPEED, bob_phase, bob_amt
+    global BOB_ENABLED, BOB_AMOUNT, BOB_SPEED, bob_phase, bob_amt, bob_intensity
     global BILLBOARDS, WALL_SCALE, LIGHT_CELLS
     global SKY, SKY_TIME, SKY_PAUSED
     global BILLBOARD_CELLS, PARTICLE_CELLS, BB_AI, AI_BB_CELLS
@@ -1995,6 +1996,7 @@ def load_map_file(caminho, preserve_position=False):
         look_y = 0
         bob_phase = 0.0
         bob_amt = 0.0
+        bob_intensity = 0.0
     BILLBOARDS = data["billboards"]
     BILLBOARD_CELLS = data["billboard_cells"]
     PARTICLE_CELLS = data["particle_cells"]
@@ -2038,11 +2040,12 @@ def draw_game_over_overlay():
 
 
 def reset_after_game_over():
-    global px, py, pangle, look_y, bob_phase, bob_amt
+    global px, py, pangle, look_y, bob_phase, bob_amt, bob_intensity
     px, py, pangle = SPAWN
     look_y = 0
     bob_phase = 0.0
     bob_amt = 0.0
+    bob_intensity = 0.0
     for idx, ai in enumerate(BB_AI):
         ai["x"] = ai["spawn_x"]
         ai["y"] = ai["spawn_y"]
@@ -2053,7 +2056,7 @@ def reset_after_game_over():
 
 def main():
     global px, py, pangle, look_y
-    global bob_phase, bob_amt
+    global bob_phase, bob_amt, bob_intensity
     global SKY_TIME, SKY_PAUSED
     global GAME_OVER, GAME_OVER_START, BB_AI
 
@@ -2184,12 +2187,16 @@ def main():
         sdx = math.cos(pangle + math.pi / 2) * speed
         sdy = math.sin(pangle + math.pi / 2) * speed
 
+        moved = False
+        intensity = 0.0
         if not GAME_OVER:
+            ox, oy = px, py
             nx, ny = px, py
             if keys[pygame.K_w] or keys[pygame.K_UP]:    nx += fdx; ny += fdy
             if keys[pygame.K_s] or keys[pygame.K_DOWN]:  nx -= fdx; ny -= fdy
             if keys[pygame.K_a] or keys[pygame.K_LEFT]:  nx -= sdx; ny -= sdy
             if keys[pygame.K_d] or keys[pygame.K_RIGHT]: nx += sdx; ny += sdy
+            intended = math.hypot(nx - ox, ny - oy)
 
             m = 0.25
             tcx = int(nx + m * math.copysign(1, nx - px))
@@ -2203,18 +2210,21 @@ def main():
                 look_y = 0
                 bob_phase = 0.0
                 bob_amt = 0.0
+                bob_intensity = 0.0
+            actual = math.hypot(px - ox, py - oy)
+            if intended > 1e-9:
+                intensity = min(1.0, actual / intended)
+            moved = intensity > 0.0
 
         # ══ ANDADA REALISTA (head bob vertical) ══
-        moving = (not GAME_OVER) and (
-            keys[pygame.K_w] or keys[pygame.K_UP] or
-            keys[pygame.K_s] or keys[pygame.K_DOWN] or
-            keys[pygame.K_a] or keys[pygame.K_LEFT] or
-            keys[pygame.K_d] or keys[pygame.K_RIGHT]
-        )
+        # Intensidade suavizada para que o bob não fique em chave 0/1 quando o
+        # player se esfrega na parede (movimento micro): a amplitude e a cadência
+        # seguem proporcionalmente ao quanto ele realmente se desloca.
+        bob_intensity += (intensity - bob_intensity) * min(1.0, dt * 8.0)
         sprinting = keys[pygame.K_LSHIFT] or keys[pygame.K_RSHIFT]
-        if BOB_ENABLED and moving:
-            bob_phase += BOB_SPEED * dt * (RUN_MULTIPLIER if sprinting else 1.0)
-            bob_amt += (BOB_AMOUNT - bob_amt) * min(1.0, dt * 10.0)
+        if BOB_ENABLED and bob_intensity > 0.02:
+            bob_phase += BOB_SPEED * dt * (RUN_MULTIPLIER if sprinting else 1.0) * bob_intensity
+            bob_amt += (BOB_AMOUNT * bob_intensity - bob_amt) * min(1.0, dt * 10.0)
         else:
             bob_amt += (0.0 - bob_amt) * min(1.0, dt * 10.0)
         bob_offset = math.sin(bob_phase) * bob_amt
