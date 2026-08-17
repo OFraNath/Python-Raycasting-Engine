@@ -585,6 +585,16 @@ tex_palB: "moderngl.Texture | None" = None
 tex_wallArr: "moderngl.TextureArray | None" = None
 tex_hasTex: "moderngl.Texture | None" = None
 
+# ── Billboards desenhados como geometria instanciada ──
+bb_prog: "moderngl.Program | None" = None
+bb_vao: "moderngl.VertexArray | None" = None
+bb_inst_buf: "moderngl.Buffer | None" = None
+cross_prog: "moderngl.Program | None" = None
+cross_vao: "moderngl.VertexArray | None" = None
+fbo = None
+fbo_color: "moderngl.Texture | None" = None
+fbo_depth: "moderngl.Texture | None" = None
+
 # ── Tela de carregamento (estado) ──
 LOADING_SCREEN_THRESHOLD_CELLS = 256
 
@@ -1001,7 +1011,8 @@ void main() {
 FRAG = """
 #version 330 core
 in vec2 uv;
-out vec4 outColor;
+layout(location = 0) out vec4 outColor;
+layout(location = 1) out vec4 outDepth;
 uniform vec2 u_res;
 uniform vec2 u_pos;
 uniform vec2 u_dir;
@@ -1214,55 +1225,8 @@ void main() {
         }
     }
     vec2 pix = vec2(uv.x, 1.0 - uv.y) * u_res;
-    {
-        float wallDepth = hit ? ((side == 0) ? (sideDist.x - delta.x) : (sideDist.y - delta.y)) : 1e9;
-        float invDet = 1.0 / (u_plane.x * u_dir.y - u_dir.x * u_plane.y);
-        float bestDepth = 1e9;
-        vec4 bestSample = vec4(0.0);
-        for (int b = 0; b < u_bbCount && b < 128; b++) {
-            vec2 sp = u_bbA[b].xy - u_pos;
-            float tx = invDet * (u_dir.y * sp.x - u_dir.x * sp.y);
-            float ty = invDet * (-u_plane.y * sp.x + u_plane.x * sp.y);
-            if (ty <= 0.05 || ty >= wallDepth || ty >= bestDepth) continue;
-            float screenX = (u_res.x * 0.5) * (1.0 + tx / ty);
-            float size = (u_scale / ty) * u_bbB[b].y;
-            float aspect = u_bbB[b].x;
-            float sizeX = size * aspect;
-            float sizeY = size;
-            float left = screenX - sizeX * 0.5;
-            if (pix.x < left || pix.x > left + sizeX) continue;
-            float dynOff = u_bbA[b].w + u_bbB[b].z * sin(u_time * u_bbB[b].w + u_bbC[b].x);
-            float shift = dynOff * (u_scale / ty);
-            float bottom = horizon + sizeY * 0.5 - shift;
-            float top = bottom - sizeY;
-            if (row < top || row > bottom) continue;
-            float fx = min(1.0, aspect);
-            float fy = min(1.0, 1.0 / aspect);
-            float ux = (pix.x - left) / sizeX;
-            float uy = (row - top) / sizeY;
-            vec2 uvBB = vec2(ux * fx + (1.0 - fx) * 0.5, uy * fy + (1.0 - fy) * 0.5);
-            vec4 s = texture(u_bbTex, vec3(uvBB, u_bbA[b].z));
-            if (s.a < 0.05) continue;
-            bestDepth = ty;
-            bestSample = s;
-        }
-        if (bestSample.a > 0.0) {
-            vec2 bWorld = clamp(u_pos + bestDepth * rayDir, vec2(0.02), u_mapSize - vec2(0.02));
-            vec3 lv = lightAt(bWorld);
-            vec3 dyn = lv / (lv + vec3(1.0));
-            vec3 lit = bestSample.rgb * dyn * 2.0;
-            float fogv2 = clamp((u_fog * bestDepth) / u_depth, 0.0, 1.0);
-            color = mix(color, lit * (1.0 - fogv2), bestSample.a);
-        }
-    }
-    vec2 ctr = u_res * 0.5;
-    float ax = abs(pix.x - ctr.x);
-    float ay = abs(pix.y - ctr.y);
-    bool onH = (ay < 2.0) && (ax < 12.0) && (ax > 4.0);
-    bool onV = (ax < 2.0) && (ay < 12.0) && (ay > 4.0);
-    if (onH || onV) {
-        color = mix(color, u_cross, 0.8);
-    }
+    float wallDepth = hit ? ((side == 0) ? (sideDist.x - delta.x) : (sideDist.y - delta.y)) : 1e9;
+    outDepth = vec4(clamp(wallDepth / u_depth, 0.0, 1.0), 0.0, 0.0, 1.0);
     vec2 mmPix = pix - u_mmPos;
     if (mmPix.x >= 0.0 && mmPix.x < u_mmSize.x && mmPix.y >= 0.0 && mmPix.y < u_mmSize.y) {
         vec2 cell = floor(mmPix / u_mmCell);
@@ -1309,6 +1273,123 @@ void main() {
         }
     }
     outColor = vec4(color, 1.0);
+}
+"""
+
+
+# ══ SHADERS DE BILLBOARDS (geometria instanciada) ══════════════════
+# Os billboards sao desenhados como quads (sprites) numa passada
+# separada, em vez de varrer todos os billboards em cada pixel do
+# fragment shader (que era O(pixels x billboards) e causava a queda
+# de ~4x com muitos billboards). A oclusao por paredes usa a
+# profundidade de parede gerada pela cena (outDepth).
+BB_VERT = """
+#version 330 core
+in vec2 in_corner;   // x em [-0.5,0.5], y em [0,1] (0 = base, 1 = topo)
+in vec4 in_a;        // bx, by, layer, yoff
+in vec4 in_b;        // scale, aspect, amp, vel
+in vec4 in_c;        // phase, ai, _, _
+uniform vec2 u_res;
+uniform vec2 u_pos;
+uniform vec2 u_dir;
+uniform vec2 u_plane;
+uniform float u_horizon;
+uniform float u_scale;
+uniform float u_time;
+out vec2 v_uv;
+out float v_layer;
+out float v_aspect;
+out float v_depth;
+void main() {
+    vec2 sp = in_a.xy - u_pos;
+    float invDet = 1.0 / (u_plane.x * u_dir.y - u_dir.x * u_plane.y);
+    float tx = invDet * (u_dir.y * sp.x - u_dir.x * sp.y);
+    float ty = invDet * (-u_plane.y * sp.x + u_plane.x * sp.y);
+    v_depth = ty;
+    v_layer = in_a.z;
+    v_aspect = in_b.y;
+    v_uv = vec2(in_corner.x + 0.5, in_corner.y);
+    float screenX = (u_res.x * 0.5) * (1.0 + tx / ty);
+    float size = (u_scale / ty) * in_b.x;
+    float sizeX = size * in_b.y;
+    float sizeY = size;
+    float dynOff = in_a.w + in_b.z * sin(u_time * in_b.w + in_c.x);
+    float shift = dynOff * (u_scale / ty);
+    float bottom = u_horizon + sizeY * 0.5 - shift;
+    float left = screenX - sizeX * 0.5;
+    float px = left + v_uv.x * sizeX;
+    float py = bottom - v_uv.y * sizeY;
+    float ndcx = px / u_res.x * 2.0 - 1.0;
+    float ndcy = 1.0 - py / u_res.y * 2.0;
+    gl_Position = vec4(ndcx, ndcy, 0.0, 1.0);
+}
+"""
+
+BB_FRAG = """
+#version 330 core
+in vec2 v_uv;
+in float v_layer;
+in float v_aspect;
+in float v_depth;
+out vec4 outColor;
+uniform sampler2DArray u_bbTex;
+uniform sampler2D u_wallDepth;
+uniform vec2 u_res;
+uniform vec2 u_pos;
+uniform vec2 u_dir;
+uniform vec2 u_plane;
+uniform vec2 u_mapSize;
+uniform sampler2D u_light;
+uniform float u_ambient;
+uniform float u_fog;
+uniform float u_depth;
+vec3 lightAt(vec2 worldPos) {
+    vec2 uvL = worldPos / u_mapSize;
+    vec3 l = texture(u_light, uvL).rgb;
+    vec3 hdr = vec3(u_ambient) + l;
+    vec3 over = max(hdr - vec3(3.0), vec3(0.0));
+    vec3 comp = (7.0 - 3.0) * (vec3(1.0) - exp(-over / (7.0 - 3.0)));
+    return min(hdr, vec3(3.0)) + comp;
+}
+void main() {
+    if (v_depth <= 0.05) discard;
+    float wd = texture(u_wallDepth, gl_FragCoord.xy / u_res).r * u_depth;
+    if (v_depth >= wd) discard;
+    float fx = min(1.0, v_aspect);
+    float fy = min(1.0, 1.0 / v_aspect);
+    vec2 uvBB = vec2(v_uv.x * fx + (1.0 - fx) * 0.5,
+                     (1.0 - v_uv.y) * fy + (1.0 - fy) * 0.5);
+    vec4 s = texture(u_bbTex, vec3(uvBB, v_layer));
+    if (s.a < 0.05) discard;
+    float ndcx = gl_FragCoord.x / u_res.x * 2.0 - 1.0;
+    vec2 rayDir = u_dir + u_plane * ndcx;
+    vec2 bWorld = clamp(u_pos + v_depth * rayDir, vec2(0.02), u_mapSize - vec2(0.02));
+    vec3 lv = lightAt(bWorld);
+    vec3 dyn = lv / (lv + vec3(1.0));
+    vec3 lit = s.rgb * dyn * 2.0;
+    float fogv = clamp((u_fog * v_depth) / u_depth, 0.0, 1.0);
+    outColor = vec4(lit * (1.0 - fogv), s.a);
+}
+"""
+
+CROSS_FRAG = """
+#version 330 core
+in vec2 uv;
+out vec4 outColor;
+uniform vec2 u_res;
+uniform vec3 u_cross;
+void main() {
+    vec2 pix = vec2(uv.x, 1.0 - uv.y) * u_res;
+    vec2 ctr = u_res * 0.5;
+    float ax = abs(pix.x - ctr.x);
+    float ay = abs(pix.y - ctr.y);
+    bool onH = (ay < 2.0) && (ax < 12.0) && (ax > 4.0);
+    bool onV = (ax < 2.0) && (ay < 12.0) && (ay > 4.0);
+    if (onH || onV) {
+        outColor = vec4(u_cross, 0.8);
+    } else {
+        outColor = vec4(0.0);
+    }
 }
 """
 
@@ -1463,6 +1544,7 @@ def resize_window(width, height):
     pygame.display.set_mode((width, height), pygame.OPENGL | pygame.DOUBLEBUF)
     if ctx is not None:
         ctx.viewport = (0, 0, width, height)
+        init_fbo()
 
 
 def init_display():
@@ -1512,12 +1594,41 @@ void main() {
     overlay_vbo = ctx.buffer(verts.tobytes())
     overlay_vao = ctx.vertex_array(overlay_prog, overlay_vbo, "in_pos", "in_uv")
 
+    # ── Passada de billboards como geometria (quads dinâmicos) ──
+    global bb_prog, bb_vao, bb_inst_buf, cross_prog, cross_vao
+    bb_prog = ctx.program(vertex_shader=BB_VERT, fragment_shader=BB_FRAG)
+    bb_inst_buf = ctx.buffer(reserve=MAX_BILLBOARD_INSTANCES * 6 * 14 * 4)
+    bb_vao = ctx.vertex_array(
+        bb_prog,
+        [(bb_inst_buf, "2f 4f 4f 4f", "in_corner", "in_a", "in_b", "in_c")],
+    )
+
+    cross_prog = ctx.program(vertex_shader=VERT, fragment_shader=CROSS_FRAG)
+    cross_vao = ctx.vertex_array(cross_prog, ctx.buffer(verts.tobytes()), "in_pos", "in_uv")
+
     tex_map = tex_light = tex_palA = tex_palB = tex_wallArr = tex_hasTex = None
     tex_bbTex = None
+    init_fbo()
     upload_textures()
 
 
 TEXTURE_LAYERS = WALL_MAX
+
+
+def init_fbo():
+    global fbo, fbo_color, fbo_depth
+    assert ctx is not None
+    if fbo_color is not None:
+        fbo_color.release()
+    if fbo_depth is not None:
+        fbo_depth.release()
+    if fbo is not None:
+        fbo.release()
+    fbo_color = ctx.texture((WIDTH, HEIGHT), 4)
+    fbo_color.filter = (moderngl.NEAREST, moderngl.NEAREST)
+    fbo_depth = ctx.texture((WIDTH, HEIGHT), 4)
+    fbo_depth.filter = (moderngl.NEAREST, moderngl.NEAREST)
+    fbo = ctx.framebuffer(color_attachments=[fbo_color, fbo_depth])
 
 
 def upload_textures():
@@ -1956,7 +2067,6 @@ def main():
         prog["u_moonColor"] = tuple(c / 255.0 for c in _rgb(SKY["moon_color"]))
         prog["u_floorB"] = tuple(fb)
         prog["u_floorT"] = tuple(ft)
-        prog["u_cross"] = tuple(cr)
         prog["u_mmPlayer"] = tuple(mp)
 
         mm_cell = max(1, MM // max(MAP_W, MAP_H))
@@ -1991,15 +2101,10 @@ def main():
             (bb_pos[i][0], bb_pos[i][1], bb_layer[i], bb_yoff[i])
             for i in range(MAX_BILLBOARD_INSTANCES)
         ]
-        prog["u_bbB"] = [
-            (bb_aspect[i], bb_scale[i], bb_amp[i], bb_vel[i])
-            for i in range(MAX_BILLBOARD_INSTANCES)
-        ]
         prog["u_bbC"] = [
             (bb_phase[i], bb_ai_type[i], 0.0, 0.0)
             for i in range(MAX_BILLBOARD_INSTANCES)
         ]
-        prog["u_time"] = time_sec() - t_start
 
         prog["u_mmPos"] = (mm_x, mm_y)
         prog["u_mmSize"] = (mm_w, mm_h)
@@ -2021,8 +2126,6 @@ def main():
         tex_wallArr.use(4)
         assert tex_hasTex is not None
         tex_hasTex.use(5)
-        assert tex_bbTex is not None
-        tex_bbTex.use(6)
         if tex_mmFlags is not None:
             tex_mmFlags.use(7)
         prog["u_map"] = 0
@@ -2031,10 +2134,76 @@ def main():
         prog["u_palB"] = 3
         prog["u_wallTex"] = 4
         prog["u_hasTex"] = 5
-        prog["u_bbTex"] = 6
         prog["u_mmFlags"] = 7
 
+        # ── Passada 1: cena (paredes/chao/ceu/minimapa) -> FBO ──
+        assert fbo is not None and ctx is not None
+        ctx.viewport = (0, 0, WIDTH, HEIGHT)
+        fbo.use()
         vao.render(mode=moderngl.TRIANGLES)
+        ctx.screen.use()
+
+        # ── Copia a cena para a tela ──
+        assert overlay_prog is not None and overlay_vao is not None
+        fbo_color.use(0)
+        overlay_prog["u_tex"] = 0
+        overlay_vao.render(mode=moderngl.TRIANGLES)
+
+        # ── Passada 2: billboards como geometria (quads dinâmicos) ──
+        assert bb_prog is not None and bb_vao is not None and bb_inst_buf is not None
+        bb_count = len(bb_instances)
+        order = sorted(range(bb_count),
+                       key=lambda i: -math.hypot(bb_instances[i][0] - px, bb_instances[i][1] - py))
+        bb_vert = np.zeros((bb_count * 6, 14), dtype="f4")
+        CORN = np.array([(-0.5, 0.0), (0.5, 0.0), (0.5, 1.0),
+                         (-0.5, 0.0), (0.5, 1.0), (-0.5, 1.0)], dtype="f4")
+        for slot, i in enumerate(order):
+            bx, by, caminho_abs, yoff, escala, amp, vel, fase, _ai, _sp = bb_instances[i]
+            layer = float(_BB_LAYER_BY_PATH.get(caminho_abs, 0))
+            aspect = float(_BB_ASPECT_BY_PATH.get(caminho_abs, 1.0))
+            ai = bb_ai_type[i]
+            base = slot * 6
+            bb_vert[base:base + 6, 0:2] = CORN
+            bb_vert[base:base + 6, 2] = bx
+            bb_vert[base:base + 6, 3] = by
+            bb_vert[base:base + 6, 4] = layer
+            bb_vert[base:base + 6, 5] = yoff
+            bb_vert[base:base + 6, 6] = escala
+            bb_vert[base:base + 6, 7] = aspect
+            bb_vert[base:base + 6, 8] = amp
+            bb_vert[base:base + 6, 9] = vel
+            bb_vert[base:base + 6, 10] = fase
+            bb_vert[base:base + 6, 11] = ai
+        if bb_count > 0:
+            bb_inst_buf.write(bb_vert[:bb_count * 6].tobytes())
+        bb_prog["u_res"] = (WIDTH, HEIGHT)
+        bb_prog["u_pos"] = (px, py)
+        bb_prog["u_dir"] = (math.cos(pangle), math.sin(pangle))
+        bb_prog["u_plane"] = (plane_x, plane_y)
+        bb_prog["u_horizon"] = HEIGHT * 0.5 + look_y
+        bb_prog["u_scale"] = (HEIGHT / (2.0 * math.tan(FOV / 2))) * WALL_SCALE
+        bb_prog["u_time"] = time_sec() - t_start
+        bb_prog["u_mapSize"] = (MAP_W, MAP_H)
+        bb_prog["u_ambient"] = AMBIENT
+        bb_prog["u_fog"] = FOG
+        bb_prog["u_depth"] = float(MAX_DEPTH)
+        if tex_light is not None:
+            tex_light.use(1)
+        assert tex_bbTex is not None
+        tex_bbTex.use(6)
+        assert fbo_depth is not None
+        fbo_depth.use(7)
+        bb_prog["u_light"] = 1
+        bb_prog["u_bbTex"] = 6
+        bb_prog["u_wallDepth"] = 7
+        if bb_count > 0:
+            bb_vao.render(mode=moderngl.TRIANGLES, vertices=bb_count * 6)
+
+        # ── Passada 3: mira (crosshair) por cima de tudo ──
+        assert cross_prog is not None and cross_vao is not None
+        cross_prog["u_res"] = (WIDTH, HEIGHT)
+        cross_prog["u_cross"] = tuple(cr)
+        cross_vao.render(mode=moderngl.TRIANGLES)
 
         if GAME_OVER:
             draw_game_over_overlay()
