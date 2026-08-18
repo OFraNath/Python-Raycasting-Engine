@@ -58,7 +58,7 @@
     radial-gradient(circle at 50% 0%, #1c1815, var(--bg));}
   #mapspacer{position:absolute;top:0;left:0;pointer-events:none;width:1px;height:1px;}
   #mapcanvas{background:#0c0a08;image-rendering:pixelated;
-    cursor:crosshair;position:sticky;top:0;left:0;display:block;}
+    cursor:none;position:sticky;top:0;left:0;display:block;}
   #stagebar .stat{color:var(--dim);font-size:11px;}
   #stagebar .stat b{color:var(--cyan);font-weight:600;}
   #hoverCoord{color:var(--dim);font-size:11px;min-width:64px;}
@@ -102,6 +102,7 @@
     padding:8px 16px;border-radius:4px;font-size:12px;opacity:0;pointer-events:none;
     transition:opacity .2s;z-index:99;}
   #status.show{opacity:1;}
+  #status.error{border-color:var(--danger);color:var(--danger);}
 </style>
 </head>
 <body>
@@ -125,10 +126,16 @@
     <div id="stagebar">
       <label>Linhas</label><input type="number" id="rowsInput" min="1" max="4000">
       <label>Colunas</label><input type="number" id="colsInput" min="1" max="4000">
-      <button class="btn" id="btnResize">Redimensionar</button>
+      <button class="btn" id="btnResize" title="Redimensionar mapa">📐</button>
       <label style="margin-left:10px">Zoom</label>
       <input type="number" id="zoomInput" min="4" max="48" value="26" style="width:44px">
-      <button class="btn" id="btnFit" title="Ajustar zoom pra caber na tela">Ajustar</button>
+      <button class="btn" id="btnFit" title="Ajustar zoom pra caber na tela">🔍</button>
+      <label style="margin-left:10px">Pincel</label>
+      <input type="number" id="brushInput" min="1" max="9" value="1" style="width:38px" title="Tamanho do pincel (NxN)">
+      <button class="btn" id="btnFillMode" title="Alternar balde de tinta (F)">🪣</button>
+      <button class="btn" id="btnMirrorH" title="Espelhar seleção copiada horizontalmente">⇋</button>
+      <button class="btn" id="btnMirrorV" title="Espelhar seleção copiada verticalmente">⇅</button>
+      <button class="btn" id="btnRotate" title="Girar seleção copiada 90°">⟳</button>
       <div class="grow"></div>
       <span id="hoverCoord">—</span>
       <span class="stat">Paredes: <b id="statWalls">0</b></span>
@@ -208,6 +215,18 @@ let tool = {kind:"wall", n:1};
 let painting = false;
 let paintErase = false;
 let lastMousePos = {i: 0, j: 0};
+let brushSize = 1;
+let fillMode = false;
+let clipboard = null; // {w,h,cells:[[tok,...],...]}
+let selection = null; // {i0,j0,i1,j1} confirmed selection
+let selecting = null;  // {i0,j0} while dragging a new selection
+let hoverHighlight = null; // {kind,n} from palette hover
+let spaceDown = false;
+let panning = false;
+let panStart = null; // {x,y,scrollLeft,scrollTop}
+let pastePreview = false;
+let hovering = false;
+const AUTOSAVE_KEY = "rcfg_editor_autosave_v1";
 
 /* ───────────────────────── PARSER (mirror _parse_sections) ───────────────────────── */
 
@@ -542,12 +561,18 @@ function paletteHTML(){
     div.innerHTML = `<span class="swatch" style="background:${swatchColor}"></span>
       <span class="lab">${label}</span>`;
     div.onclick = ()=>{ tool = {kind, n}; paletteHTML(); };
+    if(kind!=="select"){
+      div.onmouseenter = ()=>{ hoverHighlight = {kind,n}; scheduleDraw(); };
+      div.onmouseleave = ()=>{ hoverHighlight = null; scheduleDraw(); };
+    }
     el.appendChild(div);
   };
   const h = (t)=>{ const hh=document.createElement("h2"); hh.textContent=t; el.appendChild(hh); };
 
+  h("Ferramentas");
+  mk("select",0,"Seleção (retângulo)","#5fd8d0");
+
   h("Terreno");
-  mk("empty",0,"Vazio (0)","#0c0a08");
   mk("invisible",0,"Barreira invisível (N)","#161310");
 
   h("Paredes 1–9");
@@ -575,10 +600,18 @@ function paletteHTML(){
   }
 
   const hint = document.createElement("div"); hint.className="hint";
-  hint.innerHTML = "<b>Atalhos:</b> 0–9 parede/vazio · Del apaga<br>"+
+  hint.innerHTML = "<b>Atalhos:</b> 0–9 parede/vazio<br>"+
+    "Del/Backspace apaga a seleção<br>"+
     "Ctrl+Z desfaz · Ctrl+Y refaz<br>"+
-    "Shift+arraste = retângulo<br>"+
+    "Shift+arraste = retângulo cheio<br>"+
+    "Ctrl+Shift+arraste = contorno<br>"+
+    "Alt+clique = conta-gotas<br>"+
+    "F = alterna balde de tinta<br>"+
+    "Balde + seleção ativa = preenche só dentro dela<br>"+
+    "Seleção + balde ligado = clique = varinha mágica<br>"+
+    "Espaço+arraste / botão do meio = pan<br>"+
     "Ctrl+roda = zoom no cursor<br>"+
+    "Ferramenta Seleção: arraste, Ctrl+C copia,<br>segure Ctrl+V pra ver e solte pra colar<br>"+
     "Botão direito = apaga só a camada da ferramenta ativa";
   el.appendChild(hint);
 }
@@ -709,6 +742,45 @@ function drawMap(){
   scheduleDraw();
 }
 
+function drawHoverHighlightRange(i0,j0,i1,j1){
+  if(!hoverHighlight) return;
+  ctx.strokeStyle = "#5fd8d0"; ctx.lineWidth = 2;
+  for(let j=j0;j<j1;j++) for(let i=i0;i<i1;i++){
+    const {base, extras} = parseToken(state.map[j][i]);
+    const matches = (hoverHighlight.kind==="wall" && base===String(hoverHighlight.n)) ||
+      (hoverHighlight.kind==="empty" && base==="0") ||
+      (hoverHighlight.kind==="invisible" && base==="N") ||
+      (hoverHighlight.kind==="light" && extras.L===hoverHighlight.n) ||
+      (hoverHighlight.kind==="billboard" && extras.B===hoverHighlight.n) ||
+      (hoverHighlight.kind==="particle" && extras.P===hoverHighlight.n);
+    if(matches) ctx.strokeRect(i*cell+1, j*cell+1, cell-2, cell-2);
+  }
+  ctx.lineWidth = 1;
+}
+
+function drawSelectionAndPreview(){
+  if(selection || selecting){
+    const sel = selecting ? {i0:selecting.i0,j0:selecting.j0,i1:lastMousePos.i,j1:lastMousePos.j} : selection;
+    const x0=Math.min(sel.i0,sel.i1)*cell, y0=Math.min(sel.j0,sel.j1)*cell;
+    const x1=(Math.max(sel.i0,sel.i1)+1)*cell, y1=(Math.max(sel.j0,sel.j1)+1)*cell;
+    ctx.strokeStyle="#5fd8d0"; ctx.lineWidth=2; ctx.setLineDash([5,4]);
+    ctx.strokeRect(x0+1,y0+1,x1-x0-2,y1-y0-2);
+    ctx.setLineDash([]); ctx.lineWidth=1;
+  }
+
+  const preview = computePreviewCells();
+  if(preview){
+    const px0=preview.i0*cell, py0=preview.j0*cell;
+    const px1=(preview.i1+1)*cell, py1=(preview.j1+1)*cell;
+    ctx.fillStyle = "#ffffff"; ctx.globalAlpha = 0.12;
+    ctx.fillRect(px0, py0, px1-px0, py1-py0);
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2;
+    ctx.strokeRect(px0+1, py0+1, px1-px0-2, py1-py0-2);
+    ctx.lineWidth = 1;
+  }
+}
+
 function drawViewport(){
   resizeCanvasToViewport();
   const rows = state.map.length, cols = state.map[0]?.length||0;
@@ -724,6 +796,21 @@ function drawViewport(){
 
   for(let j=j0;j<j1;j++) for(let i=i0;i<i1;i++) renderCellShape(i,j);
   drawSpawnMarker(i0,j0,i1,j1);
+  drawHoverHighlightRange(i0,j0,i1,j1);
+  drawSelectionAndPreview();
+}
+
+function computePreviewCells(){
+  if(!hovering || panning || selecting || dragStart) return null;
+  const {i,j} = lastMousePos;
+  if(pastePreview && clipboard){
+    return {i0:i, j0:j, i1:i+clipboard.w-1, j1:j+clipboard.h-1};
+  }
+  if(tool.kind==="select" || fillMode){
+    return {i0:i, j0:j, i1:i, j1:j};
+  }
+  const {r0,r1} = brushOffsets();
+  return {i0:i-r0, j0:j-r0, i1:i+r1, j1:j+r1};
 }
 
 function drawCell(i, j) {
@@ -744,6 +831,53 @@ function drawCell(i, j) {
   }
 
   drawSpawnMarker(i0, j0, i1, j1);
+  updatePreviewOverlay();
+  scheduleDraw();
+}
+
+/* ── Preview do pincel sempre em sincronia com a pintura real ──
+   O redraw completo (drawViewport) só roda 1x por frame via rAF, mas a
+   pintura acontece imediatamente a cada célula. Sem isto, o retângulo
+   branco de preview ficava "preso" numa posição antiga por até um frame
+   inteiro enquanto o traço real já tinha avançado — um resquício visual
+   por cima do que acabou de ser pintado. Por isso o preview é limpo e
+   redesenhado manualmente a cada evento de pintura/movimento, nunca
+   escondido. */
+let lastPreviewRect = null;
+
+function clearPreviewRect(){
+  if(!lastPreviewRect) return;
+  const rows = state.map.length, cols = state.map[0]?.length || 0;
+  const i0 = Math.max(0, lastPreviewRect.i0), j0 = Math.max(0, lastPreviewRect.j0);
+  const i1 = Math.min(cols - 1, lastPreviewRect.i1), j1 = Math.min(rows - 1, lastPreviewRect.j1);
+  lastPreviewRect = null;
+  if(i0 > i1 || j0 > j1) return;
+  ctx.setTransform(1, 0, 0, 1, -scrollX, -scrollY);
+  for(let j=j0; j<=j1; j++) for(let i=i0; i<=i1; i++){
+    ctx.clearRect(i*cell, j*cell, cell, cell);
+    renderCellShape(i, j);
+  }
+  drawSpawnMarker(i0, j0, i1, j1);
+}
+
+function drawPreviewRectNow(){
+  const preview = computePreviewCells();
+  if(!preview){ lastPreviewRect = null; return; }
+  ctx.setTransform(1, 0, 0, 1, -scrollX, -scrollY);
+  const px0=preview.i0*cell, py0=preview.j0*cell;
+  const px1=(preview.i1+1)*cell, py1=(preview.j1+1)*cell;
+  ctx.fillStyle = "#ffffff"; ctx.globalAlpha = 0.12;
+  ctx.fillRect(px0, py0, px1-px0, py1-py0);
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 2;
+  ctx.strokeRect(px0+1, py0+1, px1-px0-2, py1-py0-2);
+  ctx.lineWidth = 1;
+  lastPreviewRect = preview;
+}
+
+function updatePreviewOverlay(){
+  clearPreviewRect();
+  drawPreviewRectNow();
 }
 
 wrap.addEventListener("scroll", scheduleDraw, {passive:true});
@@ -754,6 +888,11 @@ function cellFromEvent(e){
   const worldX = (e.clientX-rect.left) + scrollX;
   const worldY = (e.clientY-rect.top) + scrollY;
   return {i: Math.floor(worldX/cell), j: Math.floor(worldY/cell)};
+}
+
+function inMapBounds(i,j){
+  const rows = state.map.length, cols = state.map[0]?.length || 0;
+  return i>=0 && j>=0 && i<cols && j<rows;
 }
 
 function bumpStat(tok, delta){
@@ -800,6 +939,7 @@ function endStroke(){
     undoStack.push(currentStroke);
     if(undoStack.length>200) undoStack.shift();
     redoStack = [];
+    scheduleAutosave();
   }
   currentStroke = null;
 }
@@ -830,7 +970,7 @@ function redo(){
   toast("Refeito");
 }
 
-function paintAt(i,j,erase){
+function paintCell(i,j,erase){
   const rows=state.map.length, cols=state.map[0]?.length||0;
   if(i<0||j<0||i>=cols||j>=rows) return;
   const old = state.map[j][i];
@@ -843,11 +983,97 @@ function paintAt(i,j,erase){
   drawCell(i,j);
 }
 
-function fillRect(i0,j0,i1,j1,erase){
+function brushOffsets(){
+  const size = Math.max(1, brushSize);
+  return {r0: Math.floor((size-1)/2), r1: Math.ceil((size-1)/2)};
+}
+
+function paintAt(i,j,erase){
+  if(brushSize<=1){ paintCell(i,j,erase); return; }
+  const {r0,r1} = brushOffsets();
+  for(let dj=-r0; dj<=r1; dj++) for(let di=-r0; di<=r1; di++) paintCell(i+di, j+dj, erase);
+}
+
+function floodFill(i0,j0,erase){
   const rows=state.map.length, cols=state.map[0]?.length||0;
-  const lo_i=Math.max(0,Math.min(i0,i1)), hi_i=Math.min(cols-1,Math.max(i0,i1));
-  const lo_j=Math.max(0,Math.min(j0,j1)), hi_j=Math.min(rows-1,Math.max(j0,j1));
+  let bi0=0, bj0=0, bi1=cols-1, bj1=rows-1;
+  if(selection){
+    bi0=Math.max(0,Math.min(selection.i0,selection.i1));
+    bj0=Math.max(0,Math.min(selection.j0,selection.j1));
+    bi1=Math.min(cols-1,Math.max(selection.i0,selection.i1));
+    bj1=Math.min(rows-1,Math.max(selection.j0,selection.j1));
+  }
+  if(i0<bi0||j0<bj0||i0>bi1||j0>bj1){
+    toast(selection ? "Clique dentro da seleção" : "Clique dentro da área do mapa", true);
+    return;
+  }
+  const target = state.map[j0][i0];
+  const val = applyPaint(target, tool.kind, tool.n, erase);
+  if(target===val) return;
+  const stack = [[i0,j0]];
+  const seen = new Set([j0*cols+i0]);
+  while(stack.length){
+    const [i,j] = stack.pop();
+    if(i<bi0||j<bj0||i>bi1||j>bj1) continue;
+    if(state.map[j][i] !== target) continue;
+    if(currentStroke) recordChange(i,j,state.map[j][i]);
+    bumpStat(state.map[j][i],-1);
+    state.map[j][i] = val;
+    bumpStat(val,1);
+    drawCell(i,j);
+    for(const [di,dj] of [[1,0],[-1,0],[0,1],[0,-1]]){
+      const ni=i+di, nj=j+dj, key=nj*cols+ni;
+      if(ni>=bi0&&nj>=bj0&&ni<=bi1&&nj<=bj1 && !seen.has(key) && state.map[nj][ni]===target){
+        seen.add(key); stack.push([ni,nj]);
+      }
+    }
+  }
+}
+
+function floodSelect(i0,j0){
+  const rows=state.map.length, cols=state.map[0]?.length||0;
+  if(i0<0||j0<0||i0>=cols||j0>=rows){ toast("Clique dentro da área do mapa", true); return; }
+  const target = state.map[j0][i0];
+  const stack = [[i0,j0]];
+  const seen = new Set([j0*cols+i0]);
+  let minI=i0, maxI=i0, minJ=j0, maxJ=j0;
+  while(stack.length){
+    const [i,j] = stack.pop();
+    if(i<minI) minI=i; if(i>maxI) maxI=i;
+    if(j<minJ) minJ=j; if(j>maxJ) maxJ=j;
+    for(const [di,dj] of [[1,0],[-1,0],[0,1],[0,-1]]){
+      const ni=i+di, nj=j+dj, key=nj*cols+ni;
+      if(ni>=0&&nj>=0&&ni<cols&&nj<rows && !seen.has(key) && state.map[nj][ni]===target){
+        seen.add(key); stack.push([ni,nj]);
+      }
+    }
+  }
+  selection = {i0:minI, j0:minJ, i1:maxI, j1:maxJ};
+  scheduleDraw();
+  toast(`Seleção por balde: ${maxI-minI+1}×${maxJ-minJ+1}`);
+}
+
+function pickAt(i,j){
+  const rows=state.map.length, cols=state.map[0]?.length||0;
+  if(i<0||j<0||i>=cols||j>=rows){ toast("Clique dentro da área do mapa", true); return; }
+  const {base, extras} = parseToken(state.map[j][i]);
+  if(extras.B!=null) tool = {kind:"billboard", n:extras.B};
+  else if(extras.P!=null) tool = {kind:"particle", n:extras.P};
+  else if(extras.L!=null) tool = {kind:"light", n:extras.L};
+  else if(base==="N") tool = {kind:"invisible", n:0};
+  else if(base==="0") tool = {kind:"empty", n:0};
+  else if(/^\d+$/.test(base)) tool = {kind:"wall", n:parseInt(base,10)};
+  paletteHTML();
+  toast(`Ferramenta: ${tool.kind}${tool.n?" "+tool.n:""}`);
+}
+
+function fillRect(i0,j0,i1,j1,erase,outline){
+  const rows=state.map.length, cols=state.map[0]?.length||0;
+  const {r0,r1} = brushOffsets();
+  const lo_i=Math.max(0,Math.min(i0,i1)-r0), hi_i=Math.min(cols-1,Math.max(i0,i1)+r1);
+  const lo_j=Math.max(0,Math.min(j0,j1)-r0), hi_j=Math.min(rows-1,Math.max(j0,j1)+r1);
   for(let j=lo_j;j<=hi_j;j++) for(let i=lo_i;i<=hi_i;i++){
+    if(outline && i!==lo_i && i!==hi_i && j!==lo_j && j!==hi_j) continue;
     const old = state.map[j][i];
     const val = applyPaint(old, tool.kind, tool.n, erase);
     if(old===val) continue;
@@ -857,50 +1083,212 @@ function fillRect(i0,j0,i1,j1,erase){
   scheduleDraw();
 }
 
+function copySelection(){
+  if(!selection){ toast("Nenhuma seleção — use a ferramenta Seleção e arraste"); return; }
+  const rows=state.map.length, cols=state.map[0]?.length||0;
+  const i0=Math.max(0,Math.min(selection.i0,selection.i1)), i1=Math.min(cols-1,Math.max(selection.i0,selection.i1));
+  const j0=Math.max(0,Math.min(selection.j0,selection.j1)), j1=Math.min(rows-1,Math.max(selection.j0,selection.j1));
+  const cells = [];
+  for(let j=j0;j<=j1;j++) cells.push(state.map[j].slice(i0,i1+1));
+  clipboard = {w:i1-i0+1, h:j1-j0+1, cells};
+  toast(`Copiado ${clipboard.w}×${clipboard.h}`);
+}
+
+function pasteClipboard(){
+  if(!clipboard){ toast("Área de transferência vazia", true); return; }
+  const rows=state.map.length, cols=state.map[0]?.length||0;
+  const oi = lastMousePos.i, oj = lastMousePos.j;
+  const fullyOutside = (oi+clipboard.w<=0 || oj+clipboard.h<=0 || oi>=cols || oj>=rows);
+  if(fullyOutside){ toast("Cole dentro da área do mapa", true); return; }
+  beginStroke();
+  let inBounds = 0, changed = 0;
+  for(let dj=0; dj<clipboard.h; dj++) for(let di=0; di<clipboard.w; di++){
+    const i=oi+di, j=oj+dj;
+    if(i<0||j<0||i>=cols||j>=rows) continue;
+    inBounds++;
+    const val = clipboard.cells[dj][di];
+    const old = state.map[j][i];
+    if(old===val) continue;
+    recordChange(i,j,old);
+    bumpStat(old,-1); state.map[j][i]=val; bumpStat(val,1);
+    drawCell(i,j);
+    changed++;
+  }
+  endStroke();
+  if(inBounds===0){ toast("Cole dentro da área do mapa", true); return; }
+  scheduleAutosave();
+  const clipped = (oi<0||oj<0||oi+clipboard.w>cols||oj+clipboard.h>rows);
+  toast(clipped ? "Colado no cursor (parcialmente fora do mapa)" : "Colado no cursor");
+}
+
+function transformClipboard(kind){
+  if(!clipboard){ toast("Área de transferência vazia"); return; }
+  const {w,h,cells} = clipboard;
+  if(kind==="mirrorH"){
+    clipboard.cells = cells.map(row=>row.slice().reverse());
+  } else if(kind==="mirrorV"){
+    clipboard.cells = cells.slice().reverse();
+  } else if(kind==="rotate"){
+    const rotated = [];
+    for(let i=0;i<w;i++){
+      const row=[];
+      for(let j=h-1;j>=0;j--) row.push(cells[j][i]);
+      rotated.push(row);
+    }
+    clipboard = {w:h, h:w, cells:rotated};
+  }
+  toast("Área de transferência transformada");
+}
+
+function deleteSelection(){
+  if(!selection) return;
+  const rows=state.map.length, cols=state.map[0]?.length||0;
+  const i0=Math.max(0,Math.min(selection.i0,selection.i1)), i1=Math.min(cols-1,Math.max(selection.i0,selection.i1));
+  const j0=Math.max(0,Math.min(selection.j0,selection.j1)), j1=Math.min(rows-1,Math.max(selection.j0,selection.j1));
+  beginStroke();
+  for(let j=j0;j<=j1;j++) for(let i=i0;i<=i1;i++){
+    const old = state.map[j][i];
+    if(old==="0") continue;
+    recordChange(i,j,old);
+    bumpStat(old,-1); state.map[j][i]="0"; bumpStat("0",1);
+    drawCell(i,j);
+  }
+  endStroke();
+  scheduleAutosave();
+  toast("Seleção apagada");
+}
+
 let dragStart = null;
+let lastPaintCell = null;
 let hoverEl = document.getElementById("hoverCoord");
 
+/* Interpola célula a célula (Bresenham) entre o último ponto pintado e o
+   ponto atual, evitando buracos no traço quando o mouse se move rápido
+   e "pula" células entre dois eventos de mousemove. */
+function paintLine(i0,j0,i1,j1,erase){
+  let i=i0, j=j0;
+  const dx = Math.abs(i1-i0), dy = -Math.abs(j1-j0);
+  const sx = i0<i1 ? 1 : -1, sy = j0<j1 ? 1 : -1;
+  let err = dx+dy;
+  while(true){
+    paintAt(i,j,erase);
+    if(i===i1 && j===j1) break;
+    const e2 = 2*err;
+    if(e2>=dy){ err+=dy; i+=sx; }
+    if(e2<=dx){ err+=dx; j+=sy; }
+  }
+}
+
 canvas.addEventListener("mousedown", e=>{
+  const {i,j} = cellFromEvent(e);
+  lastMousePos = {i, j};
+
+  if(e.button===1 || spaceDown){
+    e.preventDefault();
+    panning = true;
+    panStart = {x:e.clientX, y:e.clientY, scrollLeft:wrap.scrollLeft, scrollTop:wrap.scrollTop};
+    return;
+  }
   if (e.button !== 0 && e.button !== 2) return;
+
+  if(!inMapBounds(i,j)){ toast("Clique dentro da área do mapa", true); return; }
+
+  if(e.altKey){ pickAt(i,j); return; }
+
+  if(tool.kind==="select"){
+    if(e.button===2) return;
+    if(fillMode){ floodSelect(i,j); return; }
+    selecting = {i0:i, j0:j};
+    selection = null;
+    return;
+  }
+
   painting = true;
   paintErase = (e.button === 2);
   beginStroke();
-  const {i,j} = cellFromEvent(e);
-  lastMousePos = {i, j};
-  if(e.shiftKey){ dragStart = {i,j}; }
-  else { dragStart=null; paintAt(i,j,paintErase); }
+  lastPaintCell = null;
+
+  if(fillMode && !e.shiftKey){
+    floodFill(i,j,paintErase);
+    updatePreviewOverlay();
+    return;
+  }
+  if(e.shiftKey){ dragStart = {i,j, outline: (e.ctrlKey||e.metaKey)}; clearPreviewRect(); }
+  else {
+    dragStart=null;
+    if(selection){ selection = null; scheduleDraw(); }
+    paintAt(i,j,paintErase);
+    lastPaintCell = {i,j};
+    updatePreviewOverlay();
+  }
 });
 
 canvas.addEventListener("mousemove", e=>{
   const {i,j} = cellFromEvent(e);
   lastMousePos = {i, j};
+  hovering = true;
   const rows=state.map.length, cols=state.map[0]?.length||0;
-  hoverEl.textContent = (i>=0&&j>=0&&i<cols&&j<rows) ? `(${i}, ${j})` : "—";
-  if(!painting) return;
+  const inBounds = (i>=0&&j>=0&&i<cols&&j<rows);
+  hoverEl.textContent = inBounds ? `(${i}, ${j}) · ${state.map[j][i]}` : "—";
+
+  if(panning && panStart){
+    wrap.scrollLeft = panStart.scrollLeft - (e.clientX - panStart.x);
+    wrap.scrollTop = panStart.scrollTop - (e.clientY - panStart.y);
+    return;
+  }
+
+  if(selecting){
+    selection = {i0:selecting.i0, j0:selecting.j0, i1:i, j1:j};
+    scheduleDraw();
+    return;
+  }
+
+  if(!painting){ updatePreviewOverlay(); scheduleDraw(); return; }
   if(dragStart){
+    clearPreviewRect();
     scheduleDraw();
     requestAnimationFrame(()=>{
       ctx.setTransform(1,0,0,1,-scrollX,-scrollY);
-      const x0=Math.min(dragStart.i,i)*cell, y0=Math.min(dragStart.j,j)*cell;
-      const x1=(Math.max(dragStart.i,i)+1)*cell, y1=(Math.max(dragStart.j,j)+1)*cell;
+      const {r0,r1} = brushOffsets();
+      const x0=(Math.min(dragStart.i,i)-r0)*cell, y0=(Math.min(dragStart.j,j)-r0)*cell;
+      const x1=(Math.max(dragStart.i,i)+r1+1)*cell, y1=(Math.max(dragStart.j,j)+r1+1)*cell;
       ctx.strokeStyle="#e0a458"; ctx.lineWidth=2;
       ctx.strokeRect(x0+1,y0+1,x1-x0-2,y1-y0-2);
       ctx.lineWidth=1;
     });
   } else {
-    paintAt(i,j,paintErase);
+    if(lastPaintCell && (lastPaintCell.i!==i || lastPaintCell.j!==j)){
+      paintLine(lastPaintCell.i, lastPaintCell.j, i, j, paintErase);
+    } else {
+      paintAt(i,j,paintErase);
+    }
+    lastPaintCell = {i,j};
+    updatePreviewOverlay();
   }
 });
-canvas.addEventListener("mouseleave", ()=>{ hoverEl.textContent="—"; });
+canvas.addEventListener("mouseleave", ()=>{ hoverEl.textContent="—"; hovering=false; clearPreviewRect(); scheduleDraw(); });
 
 window.addEventListener("mouseup", e=>{
+  if(panning){ panning=false; panStart=null; return; }
+  if(selecting){
+    const isSingleClick = (selecting.i0===lastMousePos.i && selecting.j0===lastMousePos.j);
+    selection = isSingleClick ? null : {
+      i0:Math.min(selecting.i0,lastMousePos.i), j0:Math.min(selecting.j0,lastMousePos.j),
+      i1:Math.max(selecting.i0,lastMousePos.i), j1:Math.max(selecting.j0,lastMousePos.j)
+    };
+    selecting = null;
+    scheduleDraw();
+    return;
+  }
   if(painting){
     if(dragStart){
-      fillRect(dragStart.i, dragStart.j, lastMousePos.i, lastMousePos.j, paintErase);
+      fillRect(dragStart.i, dragStart.j, lastMousePos.i, lastMousePos.j, paintErase, dragStart.outline);
     }
     painting = false;
     dragStart = null;
+    lastPaintCell = null;
     endStroke();
+    updatePreviewOverlay();
   }
 });
 
@@ -925,6 +1313,18 @@ canvas.addEventListener("wheel", e=>{
   wrap.scrollTop = fy*cell - (e.clientY-rect.top);
   scheduleDraw();
 }, {passive:false});
+
+document.getElementById("brushInput").oninput = (e)=>{
+  brushSize = Math.max(1, Math.min(9, parseInt(e.target.value)||1));
+};
+document.getElementById("btnFillMode").onclick = ()=>{
+  fillMode = !fillMode;
+  document.getElementById("btnFillMode").classList.toggle("primary", fillMode);
+  toast("Balde de tinta " + (fillMode?"ativado":"desativado"));
+};
+document.getElementById("btnMirrorH").onclick = ()=>transformClipboard("mirrorH");
+document.getElementById("btnMirrorV").onclick = ()=>transformClipboard("mirrorV");
+document.getElementById("btnRotate").onclick = ()=>transformClipboard("rotate");
 
 document.getElementById("zoomInput").oninput = drawMap;
 document.getElementById("btnFit").onclick = ()=>{
@@ -958,6 +1358,7 @@ document.getElementById("btnResize").onclick = ()=>{
   undoStack=[]; redoStack=[];
   computeStats();
   drawMap();
+  saveAutosave();
   toast(`Mapa redimensionado para ${newCols}×${newRows}`);
 };
 
@@ -972,12 +1373,43 @@ window.addEventListener("keydown", e=>{
   if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="y"){
     e.preventDefault(); redo(); return;
   }
+  if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="c"){
+    e.preventDefault(); copySelection(); return;
+  }
+  if((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="v"){
+    e.preventDefault();
+    if(!pastePreview){ pastePreview = true; scheduleDraw(); }
+    return;
+  }
+  if(e.code==="Space"){
+    e.preventDefault();
+    if(!spaceDown){ spaceDown = true; canvas.style.cursor = "grab"; }
+    return;
+  }
+  if(e.key.toLowerCase()==="f"){
+    fillMode = !fillMode;
+    document.getElementById("btnFillMode").classList.toggle("primary", fillMode);
+    toast("Balde de tinta " + (fillMode?"ativado":"desativado"));
+    return;
+  }
   if(e.key>="0" && e.key<="9"){
     const n = parseInt(e.key);
     tool = n===0 ? {kind:"empty",n:0} : {kind:"wall", n};
     paletteHTML();
   } else if(e.key==="Delete" || e.key==="Backspace"){
-    tool = {kind:"empty", n:0}; paletteHTML();
+    e.preventDefault();
+    deleteSelection();
+  }
+});
+window.addEventListener("keyup", e=>{
+  if(e.code==="Space"){
+    e.preventDefault();
+    spaceDown = false; canvas.style.cursor = "none";
+  }
+  if(pastePreview && (e.key.toLowerCase()==="v" || e.key==="Control" || e.key==="Meta")){
+    pastePreview = false;
+    pasteClipboard();
+    scheduleDraw();
   }
 });
 
@@ -1373,9 +1805,10 @@ function renderPanels(){
 
 /* ───────────────────────── TOP BAR ACTIONS ───────────────────────── */
 
-function toast(msg){
+function toast(msg, isError){
   const el = document.getElementById("status");
   el.textContent = msg; el.classList.add("show");
+  el.classList.toggle("error", !!isError);
   clearTimeout(toast._t);
   toast._t = setTimeout(()=>el.classList.remove("show"), 2200);
 }
@@ -1385,6 +1818,7 @@ document.getElementById("btnNew").onclick = ()=>{
   state = freshState(); tool={kind:"wall",n:1};
   undoStack=[]; redoStack=[];
   paletteHTML(); computeStats(); drawMap(); renderPanels();
+  saveAutosave();
   toast("Novo mapa criado");
 };
 
@@ -1402,6 +1836,7 @@ function openFile(file){
       state = loadRcfg(reader.result);
       undoStack=[]; redoStack=[];
       paletteHTML(); computeStats(); drawMap(); renderPanels();
+      saveAutosave();
       toast(`Carregado: ${file.name}`);
     }catch(err){
       alert("Erro ao carregar .rcfg: " + err.message);
@@ -1437,11 +1872,43 @@ document.getElementById("btnExport").onclick = ()=>{
   toast("Arquivo .rcfg baixado");
 };
 
+/* ───────────────────────── AUTOSAVE ───────────────────────── */
+
+function saveAutosave(){
+  try{
+    localStorage.setItem(AUTOSAVE_KEY, JSON.stringify({savedAt:Date.now(), rcfg:serializeRcfg(state)}));
+  }catch(err){ /* quota exceeded ou indisponível — ignora silenciosamente */ }
+}
+
+let autosaveTimer = null;
+function scheduleAutosave(){
+  clearTimeout(autosaveTimer);
+  autosaveTimer = setTimeout(saveAutosave, 1500);
+}
+
+function tryRestoreAutosave(){
+  let raw;
+  try{ raw = localStorage.getItem(AUTOSAVE_KEY); }catch(err){ return; }
+  if(!raw) return;
+  try{
+    const data = JSON.parse(raw);
+    const when = new Date(data.savedAt).toLocaleString("pt-BR");
+    if(confirm(`Encontrado um mapa salvo automaticamente (${when}). Deseja recuperá-lo?`)){
+      state = loadRcfg(data.rcfg);
+      undoStack=[]; redoStack=[];
+      toast("Mapa recuperado do autosave");
+    }
+  }catch(err){ /* autosave corrompido — ignora */ }
+}
+
 /* ───────────────────────── INIT ───────────────────────── */
+tryRestoreAutosave();
 paletteHTML();
 computeStats();
 drawMap();
 renderPanels();
+setInterval(saveAutosave, 20000);
+window.addEventListener("beforeunload", saveAutosave);
 </script>
 </body>
 </html>
