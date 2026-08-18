@@ -2420,7 +2420,19 @@ def main():
         mm_h = MAP_H * mm_cell
         mm_x = WIDTH - mm_w - 10
         mm_y = 10
-        bb_instances = BILLBOARDS[:MAX_BILLBOARD_INSTANCES]
+        dir_x, dir_y = math.cos(pangle), math.sin(pangle)
+        invDet = 1.0 / (plane_x * dir_y - dir_x * plane_y)
+        frustum_margin = 1.2
+        visible_bbs = []
+        for bb in BILLBOARDS:
+            bx, by = bb[0], bb[1]
+            spx, spy = bx - px, by - py
+            tx = invDet * (dir_y * spx - dir_x * spy)
+            ty = invDet * (-plane_y * spx + plane_x * spy)
+            if 0.01 < ty <= MAX_DEPTH and abs(tx) <= ty * frustum_margin:
+                visible_bbs.append(bb)
+        visible_bbs.sort(key=lambda bb: -math.hypot(bb[0] - px, bb[1] - py))
+        bb_instances = visible_bbs[:MAX_BILLBOARD_INSTANCES]
         bb_pos = [(0.0, 0.0)] * MAX_BILLBOARD_INSTANCES
         bb_layer = [0.0] * MAX_BILLBOARD_INSTANCES
         bb_yoff = [0.0] * MAX_BILLBOARD_INSTANCES
