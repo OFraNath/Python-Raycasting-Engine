@@ -126,7 +126,7 @@ def _parse_config(d):
     cfg["fov"] = math_radians(_to_float(d.get("fov", 60), "FOV"))
     cfg["num_rays"] = _to_int(d.get("num_rays", DEFAULT_CONFIG["num_rays"]), "NUM_RAYS")
     cfg["max_depth"] = _to_int(d.get("max_depth", 30), "MAX_DEPTH")
-    cfg["move_speed"] = _to_float(d.get("move_speed", 0.06), "MOVE_SPEED")
+    cfg["move_speed"] = _to_float(d.get("move_speed", DEFAULT_CONFIG["move_speed"]), "MOVE_SPEED")
     cfg["run_multiplier"] = _to_float(d.get("run_multiplier", 1.8), "RUN_MULTIPLIER")
     cfg["mouse_sens_x"] = _to_float(d.get("mouse_sens_x", 0.004), "MOUSE_SENS_X")
     cfg["mouse_sens_y"] = _to_float(d.get("mouse_sens_y", 1.0), "MOUSE_SENS_Y")

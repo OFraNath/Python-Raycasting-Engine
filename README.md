@@ -4,6 +4,12 @@ Uma engine de renderização pseudo-3D no estilo *Wolfenstein 3D*, mas que faz o
 
 A iluminação é dinâmica: as luzes seguem a lei do inverso do quadrado, projetam sombras com penumbra suave e reemitem luz nas paredes vizinhas (GI/bounce), tudo pré-calculado no momento em que o mapa `.rcfg` é carregado.
 
+Recursos em destaque:
+- Céu dinâmico com sol, lua, estrelas e ciclo de dia/noite animado (`[SKY]`)
+- Billboards (sprites) com oclusão correta, IA (amigável/inimigo) e som estéreo posicional
+- Partículas animadas flutuando, head bob realista ao andar/correr e minimapa embutido
+- `editor.html`: editor visual de mapas que roda direto no navegador
+
 Este README é um **guia de uso**: como rodar, como montar seu primeiro mapa do zero e a referência completa do formato `.rcfg`.
 
 ![status](https://img.shields.io/badge/status-em%20desenvolvimento-yellow)
@@ -53,21 +59,16 @@ python Raycasting.pyw showcase.rcfg
 
 ### Executando no Linux
 
-No Linux a extensão `.pyw` **não tem associação especial** (ela é só um nome
-de arquivo), então use `python3`. Além disso, diferente do Windows, o OpenGL
-**não vem pré-instalado**: a engine precisa das bibliotecas nativas
-`libGL.so` / `libEGL.so`, que nas distros Debian/Ubuntu ficam no pacote de
-desenvolvimento. Se estiverem ausentes, use o launcher **`run.sh`** (já
-incluído neste repositório), que ajusta o `LD_LIBRARY_PATH` automaticamente:
+No Linux a extensão `.pyw` **não tem associação especial**, então use `python3`. Diferente do Windows, o OpenGL **não vem pré-instalado**: a engine precisa das libs nativas `libGL.so` / `libEGL.so`, ausentes em distros Debian/Ubuntu sem o pacote de desenvolvimento. Use o launcher **`run.sh`** (já incluído), que ajusta o `LD_LIBRARY_PATH` automaticamente:
 
 ```bash
 ./run.sh                 # mapa de demonstração embutido
 ./run.sh showcase.rcfg   # mapa específico
 ```
 
-> **Sem `sudo`?** O `run.sh` usa a pasta `.local-libs/` (symlinks locais para
-> as libs versionadas `.so.1` já presentes no sistema), então funciona **sem
-> instalar nada no sistema**. Para uma solução permanente e system-wide:
+> **Sem `sudo`?** O `run.sh` usa a pasta `.local-libs/` (symlinks para as libs
+> versionadas `.so.1` já presentes no sistema), então funciona **sem instalar
+> nada**. Para uma solução permanente e system-wide:
 > ```bash
 > sudo apt-get install libglvnd-dev
 > ```
@@ -79,15 +80,7 @@ incluído neste repositório), que ajusta o `LD_LIBRARY_PATH` automaticamente:
 | Comando | `python Raycasting.pyw` | `./run.sh` (ou `python3 Raycasting.pyw`) |
 | Extensão `.pyw` | abre sem console (via `pythonw`) | ignorada; roda como script Python comum |
 | OpenGL | fornecido pelo driver de vídeo | precisa de `libGL.so`/`libEGL.so` (ver acima) |
-| Backend GL | `opengl32.dll` | GLX (X11) ou EGL (Wayland), detectado automaticamente pela engine |
-| Sem libs de sistema | — | use `run.sh` (symlinks locais) ou `apt-get install libglvnd-dev` |
-
-> **Nota técnica:** a engine tenta `moderngl.create_context()` e, no Linux,
-> cai num *fallback* que detecta sozinho o backend disponível (GLX no X11 ou
-> EGL no Wayland). No Windows/Mac esse caminho nativo é usado diretamente,
-> sem impacto. O shader foi ajustado para respeitar o limite de 1024
-> *constant registers* de drivers mais antigos (ex.: NVIDIA 390), empacotando
-> os atributos de billboard em arrays `vec4`.
+| Backend GL | `opengl32.dll` | GLX (X11) ou EGL (Wayland), detectado automaticamente |
 
 **Durante a execução:**
 
@@ -221,6 +214,14 @@ Um billboard com `ai_type` diferente de `none` vira um agente que navega o mapa 
 - **Amigável (`friendly`)** — FSM `FOLLOW → STAY_CLOSE`: segue o jogador e para a ~1,2 de distância, orbitando suavemente. Não causa dano.
 - **Inimigo (`enemy`)** — FSM `CHASE → GAME_OVER_TRIGGER`: persegue o jogador pelo mapa. A engine calcula uma grade de distâncias a partir da posição do jogador (BFS) e o inimigo desce o gradiente, contornando paredes; quando está na mesma célula, faz *homing* direto para não travar.
 
+**Papéis dos inimigos (estilo Pac-Man):** cada inimigo recebe um papel cíclico conforme a ordem em que foi colocado no mapa (1º = `BLINKY`, 2º = `INKY`, 3º = `PINKY`, 4º = `BLINKY`, e assim por diante):
+
+| Papel | Comportamento |
+| :--- | :--- |
+| **BLINKY** | Persegue direto a posição do jogador. |
+| **INKY** | Flanqueia: espelha o vetor "Blinky → jogador" para além do jogador, atacando pelo lado oposto. |
+| **PINKY** | Antecipa: mira ~3,5 blocos à frente da direção que o jogador está olhando/andando. Evita "colar" no Blinky usando pathfinding com penalidade (Dijkstra) quando há rota alternativa. |
+
 **Game Over:** se o inimigo encosta no jogador (`dist < 0,5`), surge uma tela **"GAME OVER"** por 2 segundos e o mapa é restaurado (jogador e billboards com IA voltam ao seu spawn original).
 
 **Minimapa:** billboards com IA aparecem como um ponto **móvel** (âmbar = amigável, vermelho = inimigo). O ponto estático de spawn é suprimido para essas células, para não confundir com o jogador.
@@ -311,7 +312,7 @@ Cada token de uma célula é `base+extra`. A **base** é o que ocupa a célula (
 | :--- | :--- |
 | `0` | Chão vazio, percorrível |
 | `1` a `9` | Parede dos tipos `1`..`9` (definidos em `[TEXTURES]`/`[COLORS]`) |
-| `N` | **Parede invisível**: bloqueia o jogador mas não é desenhada nem aparece no minimapa (sem cor/textura) — útil para confinar sem fechar a visão |
+| `N` | **Parede invisível**: bloqueia o jogador mas não é desenhada na cena 3D (sem cor/textura). No minimapa aparece com um padrão listrado — útil para confinar sem fechar a visão |
 | `0+L1` | Célula vazia com a luz `1` no centro |
 | `1+B2` | Parede do tipo `1` com um billboard `2` na célula |
 | `0+P3` | Célula vazia com as partículas `3` |
@@ -328,11 +329,14 @@ Cada token de uma célula é `base+extra`. A **base** é o que ocupa a célula (
 | `fov` | `60` | Campo de visão da câmera, em graus |
 | `num_rays` | `200` | Raios por coluna da tela (detalhe vertical) |
 | `max_depth` | `30` | Alcance máximo dos raios, em blocos |
-| `move_speed` | `0.06` | Velocidade de caminhada por frame |
+| `move_speed` | `0.035` | Velocidade de caminhada por frame |
 | `run_multiplier` | `1.8` | Multiplicador ao correr (`Shift`) |
 | `mouse_sens_x` | `0.004` | Sensibilidade horizontal do mouse |
 | `mouse_sens_y` | `1.0` | Sensibilidade vertical do mouse |
 | `max_look_y` | `240` | Ângulo máximo de olhar para cima/baixo |
+| `bob_enabled` | `true` | Liga/desliga a "andada realista" (head bob) ao se mover |
+| `bob_amount` | `8` | Amplitude vertical do head bob, em pixels |
+| `bob_speed` | `10` | Velocidade do ciclo do head bob (acelera ao correr) |
 | `fog` | `1.4` | Intensidade da névoa por distância (maior = mais densa) |
 | `gradient_steps` | `14` | Faixas do gradiente do céu |
 | `ambient` | `0.07` | Luz ambiente global (`0.0` a `1.0`) |
@@ -450,7 +454,7 @@ Cada entrada vincula um áudio de **loop infinito** a um tipo de billboard. O so
 
 ### `[PARTICLES]` — sprites animados (flutuando)
 
-Sintaxe: `ID caminho/relativo/imagem.png quantidade velocidade espalhamento` (índices `1` a `9`, usados como `P1`..`P9`)
+Sintaxe: `ID caminho/relativo/imagem.png quantidade velocidade espalhamento [offset_y] [escala]` (índices `1` a `9`, usados como `P1`..`P9`)
 
 ```
 1 assets/orbe_flutuante.png 8 0.6 4
@@ -497,13 +501,13 @@ angle 0
 
 ---
 
-## 🗺️ Mapa de exemplo
+## 🗺️ Mapas de exemplo
 
-As antigas demonstrações separadas (`demos/`, `mapas/`) foram **unificadas em uma única vitrine**, [`showcase.rcfg`](./showcase.rcfg), na raiz do projeto — reúne texturas, luzes, céu dinâmico, billboards e partículas num só lugar. Rode com:
+O repositório traz dois mapas prontos na raiz: [`showcase.rcfg`](./showcase.rcfg) (texturas, luzes e um inimigo com IA) e [`desafio.rcfg`](./desafio.rcfg) (labirinto com inimigos). Rode com:
 
 ```bash
-python Raycasting.pyw showcase.rcfg   # Windows
-./run.sh showcase.rcfg                # Linux
+python Raycasting.pyw showcase.rcfg    # Windows
+./run.sh desafio.rcfg                  # Linux
 ```
 
 ou arraste o arquivo para dentro da janela.
@@ -525,21 +529,22 @@ RAYCASTING-ENGINE/
 ├── .local-libs/          # symlinks locais das libs OpenGL (usado pelo run.sh)
 ├── requirements.txt
 ├── editor.html           # editor visual de mapas .rcfg (abre no navegador)
-├── showcase.rcfg         # mapa de exemplo (texturas, luzes, céu, billboards e partículas)
+├── showcase.rcfg         # mapa de exemplo (texturas, luzes e inimigo com IA)
+├── desafio.rcfg          # segundo mapa de exemplo (labirinto com inimigos)
 ├── LICENSE
 ├── README.md
-└── assets/               # imagens usadas pelo showcase.rcfg
+└── assets/               # imagens usadas pelos mapas
+    ├── aluminio.jpg
+    ├── concreto.jpg
     ├── floating_orb.png
     ├── folder.png
     ├── garden_bush.png
     ├── garden_wall.png
-    ├── grass.webp
     ├── metal.jpg
     ├── plant_pot.png
     ├── sparkle.png
     ├── waifu.png
-    ├── wall.jpg
-    └── youtube.webp
+    └── wall.jpg
 ```
 
 > **Dica de organização:** o projeto usa uma pasta [`assets/`](./assets) central na raiz, compartilhada por todos os mapas — é o padrão usado pelo `showcase.rcfg` e o recomendado para novos mapas. Como os caminhos no `.rcfg` são relativos ao próprio arquivo, isso significa que mapas na raiz do projeto referenciam as imagens como `assets/imagem.png`.
