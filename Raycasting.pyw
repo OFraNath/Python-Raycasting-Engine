@@ -625,6 +625,9 @@ cross_vao: "moderngl.VertexArray | None" = None
 fbo = None
 fbo_color: "moderngl.Texture | None" = None
 fbo_depth: "moderngl.Texture | None" = None
+_BB_VERT_POOL = np.zeros((MAX_BILLBOARD_INSTANCES * 6, 14), dtype="f4")
+_BB_CORN = np.array([(-0.5, 0.0), (0.5, 0.0), (0.5, 1.0),
+                     (-0.5, 0.0), (0.5, 1.0), (-0.5, 1.0)], dtype="f4")
 
 # ══ Tela de carregamento (estado) ══
 LOADING_SCREEN_THRESHOLD_CELLS = 256
@@ -658,14 +661,12 @@ _ASSET_CACHE = {}
 
 def _fallback_array(tamanho):
     w, h = tamanho
-    arr = np.zeros((h, w, 4), dtype=np.uint8)
     cel = max(1, min(w, h) // 8)
-    magenta = (255, 0, 255, 255)
-    preto = (0, 0, 0, 255)
-    for j in range(0, h, cel):
-        for i in range(0, w, cel):
-            cor = magenta if ((i // cel) + (j // cel)) % 2 == 0 else preto
-            arr[j:j + cel, i:i + cel] = cor
+    yy, xx = np.ogrid[0:h, 0:w]
+    checker = ((xx // cel) + (yy // cel)) & 1
+    arr = np.empty((h, w, 4), dtype=np.uint8)
+    arr[checker == 0] = (255, 0, 255, 255)
+    arr[checker == 1] = (0, 0, 0, 255)
     return arr
 
 
@@ -734,27 +735,70 @@ def _blocks_light(c):
 
 
 def _los_blocked_f(x0, y0, x1, y1):
-    dx, dy = x1 - x0, y1 - y0
+    dx = x1 - x0
+    dy = y1 - y0
     dist = math.hypot(dx, dy)
     if dist <= 1e-6:
         return False
-    steps = max(1, int(dist / 0.2))
+    steps = int(dist / 0.2)
+    if steps < 1:
+        steps = 1
+    map_local = MAP
+    mw = MAP_W
+    mh = MAP_H
+    wmax = WALL_MAX
+    inv_steps = 1.0 / steps
     for s in range(1, steps):
-        t = s / steps
-        icx, icy = int(x0 + dx * t), int(y0 + dy * t)
-        if 0 <= icx < MAP_W and 0 <= icy < MAP_H and _blocks_light(MAP[icy][icx]):
-            return True
+        t = s * inv_steps
+        icx = int(x0 + dx * t)
+        icy = int(y0 + dy * t)
+        if 0 <= icx < mw and 0 <= icy < mh:
+            c = map_local[icy][icx]
+            if 1 <= c <= wmax:
+                return True
     return False
+
+
+_LIGHT_CACHE = {}
+
+
+def _light_cache_sig():
+    try:
+        import hashlib
+        h = hashlib.blake2b(digest_size=8)
+        for row in MAP:
+            h.update(bytes(row))
+        for k in sorted(LIGHT_CELLS):
+            h.update(f"{k}:{LIGHT_CELLS[k]};".encode())
+        for k in sorted(LIGHT_ORBS):
+            h.update(f"{k}:{LIGHT_ORBS[k]};".encode())
+        for k in sorted(WALL_COLORS):
+            h.update(f"{k}:{WALL_COLORS[k]};".encode())
+        h.update(f"{LIGHT_RES}|{LIGHT_SOFT_SAMPLES}|{LIGHT_SOFT_RADIUS}|{LIGHT_BOUNCE}|{LIGHT_BOUNCE_RADIUS}|{LIGHT_BOUNCE_PASSES}|{AMBIENT}|{MAP_W}x{MAP_H}".encode())
+        return h.digest()
+    except Exception:
+        return None
 
 
 def compute_light_grid(on_progress=None):
     global light_grid, light_grid_np, light_grid_floor_np, LIGHT_W, LIGHT_H
+    sig = _light_cache_sig()
+    if sig is not None and sig in _LIGHT_CACHE:
+        cached = _LIGHT_CACHE[sig]
+        LIGHT_W, LIGHT_H = cached["LIGHT_W"], cached["LIGHT_H"]
+        light_grid_np = cached["light_grid_np"]
+        light_grid_floor_np = cached["light_grid_floor_np"]
+        light_grid = cached["light_grid"]
+        if on_progress is not None:
+            on_progress(1.0)
+        return
+
     res = max(1, LIGHT_RES)
     LIGHT_W = MAP_W * res
     LIGHT_H = MAP_H * res
     sub = 1.0 / res
-    grid = [[[AMBIENT, AMBIENT, AMBIENT] for _ in range(LIGHT_W)] for _ in range(LIGHT_H)]
-    grid_floor = [[[AMBIENT, AMBIENT, AMBIENT] for _ in range(LIGHT_W)] for _ in range(LIGHT_H)]
+    grid_np = np.full((LIGHT_H, LIGHT_W, 3), AMBIENT, dtype=np.float32)
+    grid_floor_np = np.full((LIGHT_H, LIGHT_W, 3), AMBIENT, dtype=np.float32)
 
     n_soft = max(1, LIGHT_SOFT_SAMPLES)
     soft_r = max(0.0, LIGHT_SOFT_RADIUS)
@@ -766,94 +810,142 @@ def compute_light_grid(on_progress=None):
                     for k in range(n_soft)]
         disc_pts.append((0.0, 0.0))
     n_pts = len(disc_pts)
+    disc_pts_t = tuple(disc_pts)
+    inv_npts = 1.0 / n_pts if n_pts else 1.0
 
-    def add_light(x, y, raio, cor_rgb, occlude=True, target=grid):
-        cx, cy = x + 0.5, y + 0.5
+    map_local = MAP
+    mw = MAP_W
+    mh = MAP_H
+    wmax = WALL_MAX
+    ambient_local = AMBIENT
+
+    def _los_blocked_local(x0, y0, x1, y1):
+        dx = x1 - x0
+        dy = y1 - y0
+        d = math.hypot(dx, dy)
+        if d <= 1e-6:
+            return False
+        steps = int(d / 0.2)
+        if steps < 1:
+            steps = 1
+        inv = 1.0 / steps
+        for s in range(1, steps):
+            t = s * inv
+            icx = int(x0 + dx * t)
+            icy = int(y0 + dy * t)
+            if 0 <= icx < mw and 0 <= icy < mh and 1 <= map_local[icy][icx] <= wmax:
+                return True
+        return False
+
+    def add_light(x, y, raio, cor_rgb, occlude=True, target_np=None):
+        if target_np is None:
+            target_np = grid_np
+        cx = x + 0.5
+        cy = y + 0.5
         r = int(math.ceil(raio))
-        for j in range(max(0, y - r), min(MAP_H, y + r + 1)):
-            for i in range(max(0, x - r), min(MAP_W, x + r + 1)):
-                base_row = j * res
+        r0 = cor_rgb[0]
+        r1 = cor_rgb[1]
+        r2 = cor_rgb[2]
+        y0 = max(0, y - r)
+        y1 = min(mh, y + r + 1)
+        x0 = max(0, x - r)
+        x1 = min(mw, x + r + 1)
+        for j in range(y0, y1):
+            base_row = j * res
+            for i in range(x0, x1):
                 base_col = i * res
                 for sj in range(res):
                     wy = j + (sj + 0.5) * sub
                     dy = wy - cy
-                    row = target[base_row + sj]
                     for si in range(res):
                         wx = i + (si + 0.5) * sub
-                        dist = math.hypot(wx - cx, dy)
+                        dx = wx - cx
+                        dist = math.hypot(dx, dy)
                         if dist > raio:
                             continue
                         if occlude:
                             vis = 0
-                            for ox, oy in disc_pts:
-                                if not _los_blocked_f(cx + ox, cy + oy, wx, wy):
+                            for ox, oy in disc_pts_t:
+                                if not _los_blocked_local(cx + ox, cy + oy, wx, wy):
                                     vis += 1
                             if vis == 0:
                                 continue
-                            vis_frac = vis / n_pts
+                            vis_frac = vis * inv_npts
                         else:
                             vis_frac = 1.0
                         d = dist / raio
                         core = 1.0 / (1.0 + 6.0 * d * d)
-                        edge = max(0.0, min(1.0, (1.0 - d) / 0.25))
+                        edge = (1.0 - d) / 0.25
+                        if edge < 0.0:
+                            edge = 0.0
+                        elif edge > 1.0:
+                            edge = 1.0
                         edge = edge * edge * (3.0 - 2.0 * edge)
                         falloff = core * edge * vis_frac
                         if falloff <= 0:
                             continue
-                        cell = row[base_col + si]
-                        cell[0] += cor_rgb[0] * falloff
-                        cell[1] += cor_rgb[1] * falloff
-                        cell[2] += cor_rgb[2] * falloff
+                        rr = base_row + sj
+                        cc = base_col + si
+                        target_np[rr, cc, 0] += r0 * falloff
+                        target_np[rr, cc, 1] += r1 * falloff
+                        target_np[rr, cc, 2] += r2 * falloff
 
-    for y in range(MAP_H):
-        for x in range(MAP_W):
+    for y in range(mh):
+        for x in range(mw):
             t = LIGHT_CELLS.get((x, y))
             if t is None:
-                t = MAP[y][x]
-                if not is_orb(t):
+                t = map_local[y][x]
+                if t < ORB_MIN:
                     continue
             cor_hex, raio = LIGHT_ORBS.get(t, ("#ffcc88", 4.0))
-            cor_rgb = tuple((c / 255.0) * 4.0 for c in _rgb(cor_hex))
-            add_light(x, y, raio, cor_rgb, target=grid)
+            rr = int(cor_hex[1:3], 16); gg = int(cor_hex[3:5], 16); bb = int(cor_hex[5:7], 16)
+            cor_rgb = (rr / 255.0 * 4.0, gg / 255.0 * 4.0, bb / 255.0 * 4.0)
+            add_light(x, y, raio, cor_rgb, occlude=True, target_np=grid_np)
         if on_progress is not None:
-            on_progress(0.7 * (y + 1) / MAP_H)
+            on_progress(0.7 * (y + 1) / mh)
 
     if LIGHT_BOUNCE > 0:
-        for passe in range(max(1, LIGHT_BOUNCE_PASSES)):
-            luz_atual = [[list(cell) for cell in row] for row in grid]
+        passes = max(1, LIGHT_BOUNCE_PASSES)
+        for passe in range(passes):
+            luz_atual = grid_np.copy()
             decaimento = LIGHT_BOUNCE * (0.6 ** passe)
-            for y in range(MAP_H):
-                for x in range(MAP_W):
-                    t = MAP[y][x]
-                    if not is_wall(t):
+            for y in range(mh):
+                for x in range(mw):
+                    t = map_local[y][x]
+                    if not (1 <= t <= wmax):
                         continue
                     cor_ns, cor_ew = WALL_COLORS.get(t, ("#888888", "#888888"))
-                    wall_rgb = tuple(((a + b) / 2.0) / 255.0 for a, b in zip(_rgb(cor_ns), _rgb(cor_ew)))
-                    ci = min(LIGHT_W - 1, x * res + res // 2)
-                    cj = min(LIGHT_H - 1, y * res + res // 2)
-                    recv_intensity = sum(luz_atual[cj][ci]) / 3.0
-                    if recv_intensity <= AMBIENT * 1.05:
+                    r0 = (int(cor_ns[1:3], 16) + int(cor_ew[1:3], 16)) * 0.5 / 255.0
+                    g0 = (int(cor_ns[3:5], 16) + int(cor_ew[3:5], 16)) * 0.5 / 255.0
+                    b0 = (int(cor_ns[5:7], 16) + int(cor_ew[5:7], 16)) * 0.5 / 255.0
+                    ci = x * res + res // 2
+                    if ci >= LIGHT_W:
+                        ci = LIGHT_W - 1
+                    cj = y * res + res // 2
+                    if cj >= LIGHT_H:
+                        cj = LIGHT_H - 1
+                    recv = (float(luz_atual[cj, ci, 0]) + float(luz_atual[cj, ci, 1]) + float(luz_atual[cj, ci, 2])) / 3.0
+                    if recv <= ambient_local * 1.05:
                         continue
-                    bounce_rgb = tuple(wall_rgb[k] * recv_intensity * decaimento for k in range(3))
-                    add_light(x, y, LIGHT_BOUNCE_RADIUS, bounce_rgb, occlude=False, target=grid)
-                    add_light(x, y, LIGHT_BOUNCE_RADIUS, bounce_rgb, occlude=False, target=grid_floor)
+                    bounce_rgb = (r0 * recv * decaimento, g0 * recv * decaimento, b0 * recv * decaimento)
+                    add_light(x, y, LIGHT_BOUNCE_RADIUS, bounce_rgb, occlude=False, target_np=grid_np)
+                    add_light(x, y, LIGHT_BOUNCE_RADIUS, bounce_rgb, occlude=False, target_np=grid_floor_np)
                 if on_progress is not None:
-                    passes = max(1, LIGHT_BOUNCE_PASSES)
-                    frac = (passe + (y + 1) / MAP_H) / passes
+                    frac = (passe + (y + 1) / mh) / passes
                     on_progress(0.7 + 0.3 * frac)
 
     if on_progress is not None:
         on_progress(1.0)
 
-    for row in grid:
-        for cell in row:
-            cell[0] = min(9.0, cell[0])
-            cell[1] = min(9.0, cell[1])
-            cell[2] = min(9.0, cell[2])
-
-    light_grid = grid
-    light_grid_np = np.array(grid, dtype=np.float32)
-    light_grid_floor_np = np.array(grid_floor, dtype=np.float32)
+    np.clip(grid_np, 0.0, 9.0, out=grid_np)
+    light_grid_np = grid_np
+    light_grid_floor_np = grid_floor_np
+    light_grid = grid_np.tolist()
+    if sig is not None:
+        _LIGHT_CACHE[sig] = {"LIGHT_W": LIGHT_W, "LIGHT_H": LIGHT_H, "light_grid_np": light_grid_np, "light_grid_floor_np": light_grid_floor_np, "light_grid": light_grid}
+        if len(_LIGHT_CACHE) > 8:
+            oldest = next(iter(_LIGHT_CACHE))
+            del _LIGHT_CACHE[oldest]
 
 
 def open_cell(cx, cy):
@@ -868,24 +960,49 @@ def in_map(x, y):
 
 
 # ══ SOM POSICIONAL ESTÉREO (billboards) ═══════════════════════════
+_WALL_COUNT_CACHE = {}
+_WALL_COUNT_CACHE_MAP_SIG = None
+
 def _count_walls_between(x0, y0, x1, y1):
+    global _WALL_COUNT_CACHE, _WALL_COUNT_CACHE_MAP_SIG
+    sig = (MAP_W, MAP_H)
+    if sig != _WALL_COUNT_CACHE_MAP_SIG:
+        _WALL_COUNT_CACHE.clear()
+        _WALL_COUNT_CACHE_MAP_SIG = sig
+    key = (int(x0 * 4), int(y0 * 4), int(x1 * 4), int(y1 * 4))
+    cached = _WALL_COUNT_CACHE.get(key)
+    if cached is not None:
+        return cached
     dx, dy = x1 - x0, y1 - y0
     dist = math.hypot(dx, dy)
     if dist <= 1e-6:
+        _WALL_COUNT_CACHE[key] = 0
         return 0
-    steps = max(1, int(dist / 0.1))
+    steps = int(dist / 0.1)
+    if steps < 1:
+        steps = 1
     count = 0
     prev_wall = False
-    for s in range(0, steps + 1):
-        t = s / steps
-        ix, iy = int(x0 + dx * t), int(y0 + dy * t)
-        if not (0 <= ix < MAP_W and 0 <= iy < MAP_H):
-            is_w = False
+    mw = MAP_W
+    mh = MAP_H
+    map_local = MAP
+    wmax = WALL_MAX
+    inv = 1.0 / steps
+    for s in range(steps + 1):
+        t = s * inv
+        ix = int(x0 + dx * t)
+        iy = int(y0 + dy * t)
+        if 0 <= ix < mw and 0 <= iy < mh:
+            c = map_local[iy][ix]
+            is_w = (1 <= c <= wmax) or c == INVISIBLE_WALL
         else:
-            is_w = is_wall(MAP[iy][ix])
+            is_w = False
         if is_w and not prev_wall:
             count += 1
         prev_wall = is_w
+    _WALL_COUNT_CACHE[key] = count
+    if len(_WALL_COUNT_CACHE) > 2048:
+        _WALL_COUNT_CACHE.clear()
     return count
 
 
@@ -949,9 +1066,16 @@ def start_billboard_sounds(bb_sounds):
         ACTIVE_SOUND_CHANNELS.append(chan)
 
 
+_SND_UPDATE_FRAME = 0
+_SND_WALL_CACHE = {}
+
 def update_billboard_sounds(px, py, pangle):
+    global _SND_UPDATE_FRAME
     if not SOUND_MIXER_INIT or not BB_SOUND:
         return
+    _SND_UPDATE_FRAME += 1
+    rx = -math.sin(pangle)
+    ry = math.cos(pangle)
     for idx, entry in enumerate(BB_SOUND):
         if entry is None:
             continue
@@ -961,28 +1085,69 @@ def update_billboard_sounds(px, py, pangle):
         if idx >= len(BILLBOARDS):
             continue
         bx, by = BILLBOARDS[idx][0], BILLBOARDS[idx][1]
-        dx, dy = bx - px, by - py
+        dx = bx - px
+        dy = by - py
         dist = math.hypot(dx, dy)
         raio = entry["radius"]
         if dist > raio or dist < 1e-6:
-            chan.set_volume(0.0, 0.0)
+            try:
+                chan.set_volume(0.0, 0.0)
+            except Exception:
+                pass
             continue
-        r_fall = max(0.0, min(1.0, 1.0 - dist / raio))
-        wall_count = _count_walls_between(bx, by, px, py)
-        w_fall = WALL_ATTEN ** wall_count
+        r_fall = 1.0 - dist / raio
+        if r_fall < 0.0:
+            r_fall = 0.0
+        elif r_fall > 1.0:
+            r_fall = 1.0
+        wc_key = (int(bx * 4), int(by * 4), int(px * 4), int(py * 4))
+        wc = _SND_WALL_CACHE.get(wc_key)
+        if wc is None or (_SND_UPDATE_FRAME % 3 == 0):
+            wc = _count_walls_between(bx, by, px, py)
+            _SND_WALL_CACHE[wc_key] = wc
+            if len(_SND_WALL_CACHE) > 1024:
+                _SND_WALL_CACHE.clear()
+        w_fall = WALL_ATTEN ** wc
         atten = r_fall * w_fall
-        rx, ry = -math.sin(pangle), math.cos(pangle)
-        proj = (dx * rx + dy * ry) / max(dist, 1e-3)
-        pan = max(-1.0, min(1.0, proj))
-        chan.set_volume(atten * (0.5 - 0.5 * pan), atten * (0.5 + 0.5 * pan))
+        proj = (dx * rx + dy * ry) / (dist if dist > 1e-3 else 1e-3)
+        if proj < -1.0:
+            proj = -1.0
+        elif proj > 1.0:
+            proj = 1.0
+        last = entry.get("_last_vol")
+        lv = atten * (0.5 - 0.5 * proj)
+        rv = atten * (0.5 + 0.5 * proj)
+        if last is not None and abs(last[0] - lv) < 0.005 and abs(last[1] - rv) < 0.005:
+            continue
+        entry["_last_vol"] = (lv, rv)
+        try:
+            chan.set_volume(lv, rv)
+        except Exception:
+            pass
 
 
 # ══ PATHFINDING (Wavefront / BFS) ═════════════════════════════
 import heapq
 from collections import deque
 
+_DIST_GRID_CACHE = {}
+_DIST_GRID_CACHE_MAP_SIG = None
+_DIST_AVOID_CACHE = {}
+
+def _dist_cache_sig():
+    return (MAP_W, MAP_H, tuple(tuple(row) for row in MAP))
 
 def compute_dist_grid(tx, ty):
+    global _DIST_GRID_CACHE, _DIST_GRID_CACHE_MAP_SIG
+    sig = (MAP_W, MAP_H)
+    if sig != _DIST_GRID_CACHE_MAP_SIG:
+        _DIST_GRID_CACHE.clear()
+        _DIST_AVOID_CACHE.clear()
+        _DIST_GRID_CACHE_MAP_SIG = sig
+    key = (int(tx), int(ty))
+    cached = _DIST_GRID_CACHE.get(key)
+    if cached is not None:
+        return cached
     tw, th = MAP_W, MAP_H
     grid = [[999999] * tw for _ in range(th)]
     sx, sy = int(tx), int(ty)
@@ -990,17 +1155,40 @@ def compute_dist_grid(tx, ty):
         grid[sy][sx] = 0
         fila = deque()
         fila.append((sx, sy))
-    else:
-        return grid
-    while fila:
-        x, y = fila.popleft()
-        d = grid[y][x]
-        for ddx, ddy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            nx, ny = x + ddx, y + ddy
-            if 0 <= nx < tw and 0 <= ny < th:
-                if grid[ny][nx] > d + 1 and open_cell(nx, ny):
-                    grid[ny][nx] = d + 1
-                    fila.append((nx, ny))
+        map_local = MAP
+        wmax = WALL_MAX
+        orb_min = ORB_MIN
+        while fila:
+            x, y = fila.popleft()
+            d = grid[y][x]
+            nd = d + 1
+            nx = x + 1
+            if nx < tw and grid[y][nx] > nd:
+                c = map_local[y][nx]
+                if c == 0 or c >= orb_min:
+                    grid[y][nx] = nd
+                    fila.append((nx, y))
+            nx = x - 1
+            if nx >= 0 and grid[y][nx] > nd:
+                c = map_local[y][nx]
+                if c == 0 or c >= orb_min:
+                    grid[y][nx] = nd
+                    fila.append((nx, y))
+            ny = y + 1
+            if ny < th and grid[ny][x] > nd:
+                c = map_local[ny][x]
+                if c == 0 or c >= orb_min:
+                    grid[ny][x] = nd
+                    fila.append((x, ny))
+            ny = y - 1
+            if ny >= 0 and grid[ny][x] > nd:
+                c = map_local[ny][x]
+                if c == 0 or c >= orb_min:
+                    grid[ny][x] = nd
+                    fila.append((x, ny))
+    if len(_DIST_GRID_CACHE) > 64:
+        _DIST_GRID_CACHE.clear()
+    _DIST_GRID_CACHE[key] = grid
     return grid
 
 
@@ -1010,6 +1198,16 @@ def compute_dist_grid_avoiding(tx, ty, avoid_x, avoid_y, avoid_radius, avoid_pen
     # "colar" no Blinky quando existe rota alternativa até o alvo (mesmo que
     # essa rota seja mais longa); se a única rota passa perto do Blinky, o
     # custo extra é finito, então ele ainda vai por ali em vez de travar.
+    sig = (MAP_W, MAP_H)
+    global _DIST_GRID_CACHE_MAP_SIG
+    if sig != _DIST_GRID_CACHE_MAP_SIG:
+        _DIST_GRID_CACHE.clear()
+        _DIST_AVOID_CACHE.clear()
+        _DIST_GRID_CACHE_MAP_SIG = sig
+    key = (int(tx), int(ty), int(avoid_x * 2), int(avoid_y * 2), avoid_radius, avoid_penalty)
+    cached = _DIST_AVOID_CACHE.get(key)
+    if cached is not None:
+        return cached
     tw, th = MAP_W, MAP_H
     grid = [[999999] * tw for _ in range(th)]
     sx, sy = int(tx), int(ty)
@@ -1018,13 +1216,20 @@ def compute_dist_grid_avoiding(tx, ty, avoid_x, avoid_y, avoid_radius, avoid_pen
     grid[sy][sx] = 0
     r2 = avoid_radius * avoid_radius
     heap = [(0, sx, sy)]
+    map_local = MAP
+    orb_min = ORB_MIN
     while heap:
         d, x, y = heapq.heappop(heap)
         if d > grid[y][x]:
             continue
+        nd_base = d + 1.0
         for ddx, ddy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-            nx, ny = x + ddx, y + ddy
-            if 0 <= nx < tw and 0 <= ny < th and open_cell(nx, ny):
+            nx = x + ddx
+            ny = y + ddy
+            if 0 <= nx < tw and 0 <= ny < th:
+                c = map_local[ny][nx]
+                if not (c == 0 or c >= orb_min):
+                    continue
                 cost = 1.0
                 ddx2 = (nx + 0.5 - avoid_x)
                 ddy2 = (ny + 0.5 - avoid_y)
@@ -1034,6 +1239,9 @@ def compute_dist_grid_avoiding(tx, ty, avoid_x, avoid_y, avoid_radius, avoid_pen
                 if nd < grid[ny][nx]:
                     grid[ny][nx] = nd # type: ignore
                     heapq.heappush(heap, (nd, nx, ny)) # type: ignore
+    if len(_DIST_AVOID_CACHE) > 64:
+        _DIST_AVOID_CACHE.clear()
+    _DIST_AVOID_CACHE[key] = grid
     return grid
 
 
@@ -1682,9 +1890,12 @@ void main() {
         _ensure_gl()
         assert prog_loading is not None
         assert vao_loading is not None
-        if quad_tex is not None:
-            quad_tex.release()
-        quad_tex = ctx.texture((sw, sh), 4, data)
+        if quad_tex is None or quad_tex.width != sw or quad_tex.height != sh:
+            if quad_tex is not None:
+                quad_tex.release()
+            quad_tex = ctx.texture((sw, sh), 4, data)
+        else:
+            quad_tex.write(data)
         quad_tex.use(0)
         prog_loading["u_tex"] = 0
         ctx.viewport = (0, 0, sw, sh)
@@ -2049,6 +2260,10 @@ def load_map_file(caminho, preserve_position=False):
     MAP = [row[:] for row in data["map"]]
     MAP_W = len(MAP[0])
     MAP_H = len(MAP)
+    _DIST_GRID_CACHE.clear()
+    _DIST_AVOID_CACHE.clear()
+    _WALL_COUNT_CACHE.clear()
+    _SND_WALL_CACHE.clear()
     WALL_COLORS = data["colors"]
     WALL_TEXTURES = data["textures"]
     THEME = dict(THEME_DEFAULTS)
@@ -2163,7 +2378,7 @@ def main():
     fps_smooth = 0.0
 
     while running:
-        dt = clock.tick_busy_loop(FPS_CAP) / 1000.0
+        dt = clock.tick(FPS_CAP) / 1000.0
         dt = max(0.0, min(0.1, dt))
 
         if SKY["enabled"] and SKY["cycle"] and not SKY_PAUSED:
@@ -2295,15 +2510,8 @@ def main():
 
         # ══ ATUALIZAÇÃO DA IA DOS BILLBOARDS (FSM + PATHFINDING) ══
         if not GAME_OVER and BB_AI:
-            dist_grid_cache = {}
-
             def get_dist_grid(tx, ty):
-                key = (int(tx), int(ty))
-                g = dist_grid_cache.get(key)
-                if g is None:
-                    g = compute_dist_grid(tx, ty)
-                    dist_grid_cache[key] = g
-                return g
+                return compute_dist_grid(tx, ty)
 
             for idx, ai in enumerate(BB_AI):
                 if ai["ai"] == AI_NONE:
@@ -2424,14 +2632,26 @@ def main():
         invDet = 1.0 / (plane_x * dir_y - dir_x * plane_y)
         frustum_margin = 1.2
         visible_bbs = []
+        _px, _py = px, py
+        _plane_x, _plane_y = plane_x, plane_y
+        _dir_x, _dir_y = dir_x, dir_y
+        _invDet = invDet
+        _maxd = MAX_DEPTH
         for bb in BILLBOARDS:
             bx, by = bb[0], bb[1]
-            spx, spy = bx - px, by - py
-            tx = invDet * (dir_y * spx - dir_x * spy)
-            ty = invDet * (-plane_y * spx + plane_x * spy)
-            if 0.01 < ty <= MAX_DEPTH and abs(tx) <= ty * frustum_margin:
+            spx = bx - _px
+            spy = by - _py
+            tx = _invDet * (_dir_y * spx - _dir_x * spy)
+            ty = _invDet * (-_plane_y * spx + _plane_x * spy)
+            if 0.01 < ty <= _maxd and abs(tx) <= ty * frustum_margin:
                 visible_bbs.append(bb)
-        visible_bbs.sort(key=lambda bb: -math.hypot(bb[0] - px, bb[1] - py))
+        if visible_bbs:
+            if len(visible_bbs) > 16:
+                d2 = np.array([(b[0]-_px)*(b[0]-_px)+(b[1]-_py)*(b[1]-_py) for b in visible_bbs], dtype=np.float32)
+                order = np.argsort(d2)[::-1]
+                visible_bbs = [visible_bbs[i] for i in order]
+            else:
+                visible_bbs.sort(key=lambda b: -((b[0]-_px)*(b[0]-_px)+(b[1]-_py)*(b[1]-_py)))
         bb_instances = visible_bbs[:MAX_BILLBOARD_INSTANCES]
         bb_pos = [(0.0, 0.0)] * MAX_BILLBOARD_INSTANCES
         bb_layer = [0.0] * MAX_BILLBOARD_INSTANCES
@@ -2516,29 +2736,31 @@ def main():
 
         assert bb_prog is not None and bb_vao is not None and bb_inst_buf is not None
         bb_count = len(bb_instances)
-        order = sorted(range(bb_count),
-                       key=lambda i: -math.hypot(bb_instances[i][0] - px, bb_instances[i][1] - py))
-        bb_vert = np.zeros((bb_count * 6, 14), dtype="f4")
-        CORN = np.array([(-0.5, 0.0), (0.5, 0.0), (0.5, 1.0),
-                         (-0.5, 0.0), (0.5, 1.0), (-0.5, 1.0)], dtype="f4")
-        for slot, i in enumerate(order):
-            bx, by, caminho_abs, yoff, escala, amp, vel, fase, _ai, _sp = bb_instances[i]
-            layer = float(_BB_LAYER_BY_PATH.get(caminho_abs, 0))
-            aspect = float(_BB_ASPECT_BY_PATH.get(caminho_abs, 1.0))
-            ai = bb_ai_type[i]
-            base = slot * 6
-            bb_vert[base:base + 6, 0:2] = CORN
-            bb_vert[base:base + 6, 2] = bx
-            bb_vert[base:base + 6, 3] = by
-            bb_vert[base:base + 6, 4] = layer
-            bb_vert[base:base + 6, 5] = yoff
-            bb_vert[base:base + 6, 6] = escala
-            bb_vert[base:base + 6, 7] = aspect
-            bb_vert[base:base + 6, 8] = amp
-            bb_vert[base:base + 6, 9] = vel
-            bb_vert[base:base + 6, 10] = fase
-            bb_vert[base:base + 6, 11] = ai
         if bb_count > 0:
+            if bb_count > 1:
+                d2 = [(bb_instances[i][0]-px)*(bb_instances[i][0]-px)+(bb_instances[i][1]-py)*(bb_instances[i][1]-py) for i in range(bb_count)]
+                order = sorted(range(bb_count), key=lambda i: -d2[i])
+            else:
+                order = [0]
+            bb_vert = _BB_VERT_POOL
+            CORN = _BB_CORN
+            for slot, i in enumerate(order):
+                bx, by, caminho_abs, yoff, escala, amp, vel, fase, _ai, _sp = bb_instances[i]
+                layer = float(_BB_LAYER_BY_PATH.get(caminho_abs, 0))
+                aspect = float(_BB_ASPECT_BY_PATH.get(caminho_abs, 1.0))
+                ai = bb_ai_type[i]
+                base = slot * 6
+                bb_vert[base:base + 6, 0:2] = CORN
+                bb_vert[base:base + 6, 2] = bx
+                bb_vert[base:base + 6, 3] = by
+                bb_vert[base:base + 6, 4] = layer
+                bb_vert[base:base + 6, 5] = yoff
+                bb_vert[base:base + 6, 6] = escala
+                bb_vert[base:base + 6, 7] = aspect
+                bb_vert[base:base + 6, 8] = amp
+                bb_vert[base:base + 6, 9] = vel
+                bb_vert[base:base + 6, 10] = fase
+                bb_vert[base:base + 6, 11] = ai
             bb_inst_buf.write(bb_vert[:bb_count * 6].tobytes())
         bb_prog["u_res"] = (WIDTH, HEIGHT)
         bb_prog["u_pos"] = (px, py)
@@ -2596,7 +2818,7 @@ def main():
 
 def time_sec():
     import time
-    return time.time()
+    return time.perf_counter()
 
 
 MAX_RESTART_ATTEMPTS = 3
