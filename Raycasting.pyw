@@ -469,9 +469,16 @@ def load_rcfg(caminho):
             ai_cells.add((ci, cj))
         snd = billboard_sound_defs.get(tipo)
         if snd is not None:
-            bb_sounds.append({"path": snd[0], "radius": snd[1], "volume": snd[2], "channel": None})
+            bb_sounds.append({"path": snd[0], "radius": snd[1], "volume": snd[2], "channel": None, "x": x, "y": y})
         else:
             bb_sounds.append(None)
+    for (x, y, tipo) in billboard_cells:
+        if tipo in billboard_defs:
+            continue
+        snd = billboard_sound_defs.get(tipo)
+        if snd is None:
+            continue
+        bb_sounds.append({"path": snd[0], "radius": snd[1], "volume": snd[2], "channel": None, "x": x, "y": y})
 
     return {
         "config": _parse_config(dados.get("CONFIG", {})),
@@ -1082,9 +1089,14 @@ def update_billboard_sounds(px, py, pangle):
         chan = entry.get("channel")
         if chan is None:
             continue
-        if idx >= len(BILLBOARDS):
+        if "x" in entry and "y" in entry:
+            bx, by = entry["x"], entry["y"]
+        elif idx < len(BILLBOARDS):
+            bx, by = BILLBOARDS[idx][0], BILLBOARDS[idx][1]
+        elif idx < len(BB_AI):
+            bx, by = BB_AI[idx]["rx"], BB_AI[idx]["ry"]
+        else:
             continue
-        bx, by = BILLBOARDS[idx][0], BILLBOARDS[idx][1]
         dx = bx - px
         dy = by - py
         dist = math.hypot(dx, dy)
@@ -2572,6 +2584,9 @@ def main():
 
                 old = BILLBOARDS[idx]
                 BILLBOARDS[idx] = (ai["rx"], ai["ry"], old[2], old[3], old[4], old[5], old[6], old[7], old[8], old[9])
+                if idx < len(BB_SOUND) and BB_SOUND[idx] is not None:
+                    BB_SOUND[idx]["x"] = ai["rx"]
+                    BB_SOUND[idx]["y"] = ai["ry"]
 
         if not GAME_OVER:
             update_billboard_sounds(px, py, pangle)
